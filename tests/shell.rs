@@ -709,12 +709,11 @@ fn the_service_worker_template_has_exactly_one_placeholder() {
         worker.contains("'icon.svg'"),
         "the worker does not precache the icon's source of truth"
     );
-    // `skipWaiting` must not be *called*. The word appears in the template's
-    // own comment explaining why it is absent, so match the call.
-    assert!(
-        !worker.contains("skipWaiting("),
-        "an update must never swap the wasm under a live tab"
-    );
+    // `skipWaiting` is allowed here, but only as the page's answer — see
+    // `a_new_version_can_take_over_a_running_app`. The template forbade the call
+    // outright, and that rule is how this app came to ship a worker that could
+    // never take over a running one: nothing was swapping code under a live tab,
+    // and nothing was updating an installed app either.
 }
 
 /// The worker only ever answers for a URL inside its own app's directory.
@@ -2187,5 +2186,88 @@ fn the_light_scheme_changes_colours_and_nothing_else() {
         !script.contains("matchMedia") && !script.contains("prefers-color-scheme"),
         "the theme must be chosen in CSS: a script runs after the first paint, \
          so the wrong palette is shown first"
+    );
+}
+
+/// Strip `//` and `/* */` comments from JavaScript, so an assertion is about
+/// code rather than about prose that discusses it.
+fn strip_js_comments(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut rest = source;
+    while let Some(at) = rest.find("//") {
+        // A `//` inside a string literal would be a false positive; the worker
+        // has none, and the ones it does have are URLs with a scheme, which
+        // never begin a line this function is asked about.
+        out.push_str(&rest[..at]);
+        match rest[at..].find('\n') {
+            Some(end) => rest = &rest[at + end..],
+            None => return out,
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// A new version must be able to reach an installed app.
+///
+/// This is the failure the family spent three sessions on: a worker that
+/// installs a new version and then waits — for days, on a phone — while the app
+/// keeps running the code it was closed with. The worker is the half that was
+/// missing here: the page asked, and nothing answered.
+#[test]
+fn a_new_version_can_take_over_a_running_app() {
+    let worker = strip_js_comments(&worker_template());
+
+    assert!(
+        worker.contains("self.addEventListener('message'"),
+        "the worker must listen for the page's handover request"
+    );
+    assert!(
+        worker.contains("event.data === 'SKIP_WAITING'") && worker.contains("self.skipWaiting()"),
+        "the worker must call skipWaiting, and only for the page's own message"
+    );
+
+    // And never on install: that would swap the wasm out from under a game in
+    // progress, which is the reason the call is gated in the first place.
+    let install = worker
+        .split_once("addEventListener('install'")
+        .expect("the install handler")
+        .1
+        .split_once("addEventListener(")
+        .expect("the next listener")
+        .0;
+    assert!(
+        !install.contains("skipWaiting"),
+        "skipWaiting must not run on install"
+    );
+
+    // The page's half, in the browser layer: it posts the message and reloads
+    // once when the new worker takes control.
+    let ui =
+        strip_rust_comments(&std::fs::read_to_string(root().join("src/ui.rs")).expect("src/ui.rs"));
+    assert!(
+        ui.contains("SKIP_WAITING"),
+        "the page must ask the waiting worker in"
+    );
+    assert!(
+        ui.contains("post_message"),
+        "the ask has to be a message to the waiting worker"
+    );
+    assert!(
+        ui.contains("controllerchange"),
+        "the page has to reload when the new worker takes control, or it keeps \
+         running the old code in a page that reports the new version"
+    );
+    assert!(
+        ui.contains("registration.update()"),
+        "a check of our own is needed: register() resolving does not mean the \
+         update check it started has finished, and updatefound can fire first"
+    );
+
+    // The manifest is the browser's, not the page's: serving it from the cache
+    // pins an installed app to the name, icon and start URL it shipped with.
+    assert!(
+        worker.contains("if (url === MANIFEST) return;"),
+        "the worker must leave the manifest to the network"
     );
 }

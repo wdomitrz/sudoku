@@ -777,6 +777,18 @@ async fn register_worker(window: &Window) -> Result<web_sys::ServiceWorkerContai
         .add_event_listener_with_callback("updatefound", update_found.as_ref().unchecked_ref());
     update_found.forget();
 
+    // …and, because the two cases above are both races the browser can lose, a
+    // check of our own. `register()` resolving does not mean the update check it
+    // started has finished, so an update that arrives a moment later fires
+    // `updatefound` before the listener above exists — the new worker then sits
+    // in `waiting` for as long as the app stays open, which is exactly how an
+    // installed app stops receiving fixes. Asking for a check and looking again
+    // when it resolves closes that window.
+    if let Ok(promise) = registration.update() {
+        let _ = JsFuture::from(promise).await;
+    }
+    ask_waiting_worker_in(&registration);
+
     // And the handover itself: when the new worker takes control, the page is
     // still the old version in memory, so reload — exactly once, or the page
     // would loop.

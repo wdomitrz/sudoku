@@ -6,7 +6,9 @@
 //!   generator that proves every puzzle it makes has exactly one answer.
 //! * [`game`] — one sitting of it: the selection, the digits written, the
 //!   pencil marks, the clock, the moves that can be taken back.
-//! * [`ui`] — the browser layer, compiled only for `wasm32-unknown-unknown`.
+//! * `ui` — the browser layer, compiled only for `wasm32-unknown-unknown`
+//!   (so it is absent from a host build, and a doc link to it would not
+//!   resolve there).
 //!   Every `document`, `localStorage` and service-worker call lives here, and
 //!   nothing else does.
 //!

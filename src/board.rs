@@ -464,7 +464,7 @@ pub fn solve(grid: &Grid) -> Option<Grid> {
 
 /// Count the solutions to a grid, stopping at `limit`.
 ///
-/// Returns at most `limit`. A search that exhausts [`NODE_BUDGET`] without
+/// Returns at most `limit`. A search that exhausts the node budget without
 /// settling the count reports `limit`, so a caller asking "is this unique?"
 /// (`limit = 2`) is never told a puzzle is unique on the strength of an
 /// unfinished proof.
