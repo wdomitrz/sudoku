@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Sudoku">
+  <!-- The icon: a sudoku grid, at the size the eye can actually resolve. A real
+       9×9 is 57 px per cell at 512 and reads as grey mush at the 192 px the
+       launcher uses, so this is the 3×3 box structure with a few cells filled —
+       the shape a puzzle has before it is solved, which is also the only thing
+       that distinguishes a sudoku from a spreadsheet.
+
+       One colour, on a transparent ground, at the measured midpoint between a
+       light and a dark surface: a single static icon cannot clear 4.5:1 on both
+       (#7a7a7a is 4.29:1 on white and 4.40:1 on the app's own dark ground), and
+       3:1 is the bar for a graphical object. Every install icon is rasterized
+       from this file at build time; this is the source of truth, never a PNG. -->
+  <g fill="none" stroke="#7a7a7a" stroke-linecap="round">
+    <rect x="56" y="56" width="400" height="400" rx="34" stroke-width="30"/>
+    <path d="M189.33 56v400M322.67 56v400M56 189.33h400M56 322.67h400" stroke-width="18"/>
+  </g>
+  <!-- Four placed digits, as blocks: the puzzle part-way through, which is what
+       a sudoku in progress looks like at a glance. -->
+  <g fill="#7a7a7a">
+    <rect x="86" y="86" width="72" height="72" rx="12"/>
+    <rect x="354" y="86" width="72" height="72" rx="12"/>
+    <rect x="86" y="354" width="72" height="72" rx="12"/>
+    <rect x="220" y="220" width="72" height="72" rx="12"/>
+  </g>
+</svg>

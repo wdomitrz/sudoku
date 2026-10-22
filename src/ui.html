@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- Two theme colours, one per scheme, and no single one that has to guess: an
+     installed app's status bar is painted from these, so one hardcoded value
+     would put a dark bar over a light page (or the reverse) until the reader
+     changed their phone. The manifest deliberately carries no `theme_color` for
+     the same reason — an installed app's chrome cannot express a scheme
+     variant, so it would override both of these.
+     The browser follows the system here with no script at all: `prefers-color-
+     scheme` re-evaluates when the reader switches their phone between light and
+     dark, including while this page is open. -->
+<meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e1116" media="(prefers-color-scheme: dark)">
+<meta name="description" content="Sudoku with pencil marks, hints and undo, that works offline.">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Sudoku</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<!-- The SVG is the icon: the committed source of truth, scaled by the browser.
+     The PNGs beside it are rasterized from this same file at build time, for
+     the manifest and for iOS. -->
+<link rel="icon" href="./icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="./icon-192.png">
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<header>
+  <h1 id="title">Sudoku</h1>
+  <span id="stamp">Easy</span>
+</header>
+
+<!-- The three facts about this sitting. `role="status"` on the clock alone would
+     announce every second, which is unbearable with a screen reader, so the
+     live region is #status below and these are plain text. -->
+<div class="facts">
+  <span id="clock">00:00</span>
+  <span id="mistakes">no mistakes</span>
+  <span id="remaining">81 left</span>
+</div>
+
+<!-- The grid: 81 buttons, written by the app on every change. Their names come
+     from the app too, because a cell's text is one digit and a digit alone
+     ("7") never says where it is. -->
+<div id="board" role="group" aria-labelledby="title" aria-describedby="status"></div>
+
+<div id="solved" hidden>
+  <strong>Solved</strong>
+  <span id="solved-detail"></span>
+  <button id="solved-new" type="button">New puzzle</button>
+</div>
+
+<h2 id="pad-heading" class="visually-hidden">Digits</h2>
+<div id="pad" role="group" aria-labelledby="pad-heading"></div>
+
+<div id="tools">
+  <button id="notes" type="button" aria-pressed="false">Notes</button>
+  <button id="undo" type="button">Undo</button>
+  <button id="erase" type="button">Erase</button>
+  <button id="hint" type="button">Hint</button>
+</div>
+
+<div class="menu">
+  <label class="visually-hidden" for="difficulty">Difficulty</label>
+  <select id="difficulty">
+    <option value="easy">Easy</option>
+    <option value="medium">Medium</option>
+    <option value="hard">Hard</option>
+  </select>
+  <button id="new" type="button">New puzzle</button>
+  <button id="restart" type="button">Restart</button>
+</div>
+
+<!-- What just happened, in words, for anyone who is not watching the grid.
+     Empty until there is something to say: a live region that ships with text
+     in it announces that text on load, which is noise. -->
+<p id="status" role="status" aria-live="polite"></p>
+<p id="error" role="alert" hidden></p>
+
+<noscript>This sudoku needs JavaScript enabled. Turn it on and reload to play.</noscript>
+<!-- The one script in the document: it hands over to the generated bindings and
+     does nothing else. No state, no rendering, no event handling — everything
+     below the import is the failure message for the case where the app never
+     loads, which is a real case worth saying something about. -->
+<script type="module">
+import('./app.js').then(m => m.default()).catch(error => {
+  const box = document.getElementById('error');
+  box.hidden = false;
+  box.textContent = 'Sudoku could not start. Reload the page, or check your connection. ' + error;
+});
+</script>
+</body>
+</html>
