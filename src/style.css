@@ -1,0 +1,396 @@
+/* One palette, in two schemes, and dark is the default rather than the
+   override. That is the family convention and it is deliberate: `color-scheme`
+   names the scheme the page is *drawn* in, so a reader who has chosen nothing
+   gets the one the app was designed in, and a reader who has chosen gets
+   theirs. Nothing here consults a script, so the choice is made before the first
+   paint — a theme applied after load would flash the wrong one first. */
+:root {
+  color-scheme: dark;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --bg: #0e1116;
+  --surface: #161b22;
+  --surface-2: #1c232c;
+  --fg: #e6edf3;
+  --muted: #8b949e;
+  --line: #242c37;
+  --line-strong: #414d5e;
+  --accent: #4c9aff;
+  --accent-ink: #04121f;
+  --peer: #1a2a3d;
+  --same: #223449;
+  --given: #e6edf3;
+  --player: #79c0ff;
+  --wrong: #ff7b72;
+  --note: #9aa7b4;
+  --ok: #3fb950;
+  /* The board's own width, so every sizing decision below is derived from one
+     number: square cells, digits scaled to the cell, and nothing that has to be
+     kept in step by hand. */
+  --board: min(94vw, 30rem, calc(100vh - 19rem));
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg: #f2f4f7;
+    --surface: #ffffff;
+    --surface-2: #eef1f5;
+    --fg: #1c2128;
+    --muted: #57606a;
+    --line: #d7dde4;
+    --line-strong: #8c959f;
+    --accent: #0b5cd5;
+    --accent-ink: #ffffff;
+    --peer: #e8effa;
+    --same: #d8e6fa;
+    --given: #1c2128;
+    --player: #0b4fb3;
+    --wrong: #b3261e;
+    --note: #57606a;
+    --ok: #1a7f37;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html { height: 100%; }
+
+body {
+  margin: 0;
+  min-height: 100%;
+  padding: max(.5rem, env(safe-area-inset-top)) .6rem max(.75rem, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .55rem;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.35;
+  /* A sudoku is a tap-target grid: selecting text by dragging across it is
+     always accidental, and a double tap must not zoom the board. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+header {
+  width: var(--board);
+  display: flex;
+  align-items: baseline;
+  gap: .5rem;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 650;
+  letter-spacing: -.01em;
+}
+
+#stamp {
+  margin-left: auto;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: .8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The three facts about the sitting: how long, how wrong, how much left. Each
+   is labelled by its own position rather than by a caption, so the line stays
+   short enough for a phone. */
+.facts {
+  width: var(--board);
+  display: flex;
+  gap: .4rem;
+  font-family: var(--mono);
+  font-size: .78rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.facts span { white-space: nowrap; }
+.facts span:last-child { margin-left: auto; }
+#clock { color: var(--fg); }
+
+/* The board. A 9-column grid of buttons, one pixel lines between cells and
+   heavier ones on the 3×3 boundaries: the thicker rules are drawn as the cells'
+   own right and bottom borders, which is why the last column and last row are
+   excluded — the board's own border is their edge. */
+#board {
+  width: var(--board);
+  height: var(--board);
+  display: grid;
+  grid-template-columns: repeat(9, 1fr);
+  grid-template-rows: repeat(9, 1fr);
+  background: var(--surface);
+  border: 2px solid var(--line-strong);
+  border-radius: .5rem;
+  overflow: hidden;
+}
+
+#board button {
+  /* Every cell is a real button: focusable, announced, and tappable without a
+     listener per cell. Styling is reset to nothing but a digit. */
+  all: unset;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  cursor: pointer;
+  color: var(--given);
+  font-family: var(--font);
+  font-size: calc(var(--board) / 9 * .56);
+  font-weight: 500;
+  line-height: 1;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  transition: background-color .1s;
+}
+
+#board button:nth-child(9n) { border-right: 0; }
+#board button:nth-child(n+73) { border-bottom: 0; }
+/* The 3×3 boundaries. `3n` is every third column including the last, so the
+   last column is excluded by the `:not()` for the right edge; the bottom edge
+   is the same idea one row later. */
+#board button:nth-child(3n):not(:nth-child(9n)) { border-right: 2px solid var(--line-strong); }
+#board button:nth-child(n+19):nth-child(-n+27),
+#board button:nth-child(n+46):nth-child(-n+54) { border-bottom: 2px solid var(--line-strong); }
+
+#board button.given { font-weight: 700; }
+#board button.player { color: var(--player); }
+#board button.wrong { color: var(--wrong); }
+/* A digit that repeats in its row, column or box. A tint would fight the
+   selection and peer backgrounds, so a clash is marked on the digit itself:
+   under it, in the error colour, on both cells that disagree. */
+#board button.conflict .digit {
+  text-decoration: underline;
+  text-decoration-color: var(--wrong);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+#board button.peer { background: var(--peer); }
+#board button.same { background: var(--same); }
+#board button.selected {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+#board button.selected .digit { color: var(--accent-ink); }
+/* A wrong digit on the selected cell still has to read as wrong, so the
+   selection ring is drawn inside the fill rather than replacing it. */
+#board button.selected.wrong {
+  background: var(--wrong);
+  color: var(--bg);
+}
+
+/* Pencil marks: up to nine digits in a cell, laid out in their own 3×3 so each
+   sits where its position on the number pad suggests it. */
+#board button .notes {
+  position: absolute;
+  inset: 8%;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  font-size: calc(var(--board) / 9 * .26);
+  font-weight: 500;
+  color: var(--note);
+  line-height: 1;
+}
+
+#board button .notes i {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-style: normal;
+}
+
+/* Pencil marks on the selected cell sit on the accent fill, where the muted
+   grey they use elsewhere is close to invisible. They take the fill's own ink
+   instead, at full strength: these are the player's own working, and losing
+   them the moment a cell is tapped is the one thing a notes grid must not do. */
+#board button.selected .notes { color: var(--accent-ink); opacity: .85; }
+
+/* The number pad. Nine digits and their remaining counts, then the three tools
+   that have no digit of their own. */
+#pad {
+  width: var(--board);
+  display: grid;
+  grid-template-columns: repeat(9, 1fr);
+  gap: .3rem;
+}
+
+#pad button, #tools button, .menu button {
+  all: unset;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: .05rem;
+  cursor: pointer;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: .45rem;
+  color: var(--fg);
+  font: inherit;
+  /* The platform's minimum comfortable target, and the reason the pad is a
+     second row rather than squeezed onto the board. */
+  min-height: 44px;
+  text-align: center;
+}
+
+#pad button { font-size: 1.15rem; font-weight: 600; }
+#pad button small {
+  font-family: var(--mono);
+  font-size: .6rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+#pad button:active, #tools button:active, #menu button:active { filter: brightness(.92); }
+#pad button[disabled] {
+  /* A digit placed nine times is finished, not unavailable: it stays readable
+     and is still tappable, which is how a reader checks their work. */
+  color: var(--muted);
+}
+#pad button.done { color: var(--muted); opacity: .55; }
+
+#tools {
+  width: var(--board);
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: .3rem;
+}
+
+#tools button { font-size: .82rem; font-weight: 600; gap: .1rem; }
+#tools button[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+#tools button:disabled { opacity: .45; }
+
+.menu {
+  width: var(--board);
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: .3rem;
+  align-items: stretch;
+}
+
+.menu button { font-size: .8rem; font-weight: 600; min-height: 44px; }
+
+#difficulty {
+  min-height: 40px;
+  width: 100%;
+  padding: 0 .5rem;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: .45rem;
+  font: inherit;
+  font-size: .8rem;
+  font-weight: 600;
+}
+
+/* The solved panel takes the pad's place rather than covering the board: the
+   finished grid is the thing worth looking at. */
+#solved {
+  width: var(--board);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .35rem .5rem;
+  padding: .55rem .75rem;
+  background: var(--surface-2);
+  border: 1px solid var(--ok);
+  border-radius: .5rem;
+}
+#solved strong { color: var(--ok); font-size: .95rem; }
+#solved span {
+  color: var(--muted);
+  font-size: .76rem;
+  font-family: var(--mono);
+  /* The facts take the whole line under the heading, so the button below them
+     gets a comfortable target instead of being squeezed in beside three lines
+     of monospace. */
+  flex-basis: 100%;
+  order: 3;
+}
+#solved button {
+  /* Same reset as every other control in the panel: the panel's own button is
+     the one place a bare <button> would otherwise keep the browser's default
+     chrome, which looks like a different product. */
+  all: unset;
+  order: 4;
+  margin-left: auto;
+  cursor: pointer;
+  padding: .4rem .8rem;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-radius: .45rem;
+  font: inherit;
+  font-size: .8rem;
+  font-weight: 600;
+}
+#solved button:active { filter: brightness(.92); }
+
+/* Text that names a control or a region for a screen reader and takes no space
+   on screen. It is an element rather than an attribute on the control: a
+   translation, a speech engine and the rest of the page all see the same text,
+   and the shell never hard-codes a second name for a control the app names. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+[hidden] { display: none !important; }
+
+/* The line a screen reader hears about the last move, and the failure box for
+   the case where the app never starts. Both are silent until they have
+   something to say. */
+#status {
+  width: var(--board);
+  min-height: 1.1rem;
+  margin: 0;
+  color: var(--muted);
+  font-size: .76rem;
+}
+
+#error {
+  width: var(--board);
+  margin: 0;
+  padding: .5rem .6rem;
+  color: var(--wrong);
+  background: var(--surface);
+  border: 1px solid var(--wrong);
+  border-radius: .45rem;
+  font-size: .78rem;
+}
+
+/* Never remove the focus ring; replace it with one that survives every
+   background this grid puts under a cell. */
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: -3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

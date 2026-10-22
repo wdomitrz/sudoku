@@ -16,7 +16,7 @@
 
 const ROOT = new URL('./', self.location.href);
 const CACHE = 'sudoku-' + ROOT.pathname + '-__VERSION__';
-const ASSETS = ['./', 'app.js', 'app_bg.wasm', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon.svg', 'index.html'].map(p => new URL(p, ROOT).href);
+const ASSETS = ['./', 'app.js', 'app_bg.wasm', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon.svg', 'index.html', 'style.css'].map(p => new URL(p, ROOT).href);
 const IS_OWN = url => url.startsWith(ROOT.href);
 
 self.addEventListener('install', event => {

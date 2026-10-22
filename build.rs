@@ -77,7 +77,10 @@ const MANIFEST: Manifest = Manifest {
 /// The two wasm artefacts are deliberately absent: they are written by
 /// `wasm-bindgen` into `dist/`, they are never committed, and they have no
 /// committed source to copy from.
-const SHELL: &[(&str, &str)] = &[("index.html", "src/ui.html")];
+const SHELL: &[(&str, &str)] = &[
+    ("index.html", "src/ui.html"),
+    ("style.css", "src/style.css"),
+];
 
 /// The committed SVG every icon is derived from.
 const ICON: &str = "assets/icon.svg";

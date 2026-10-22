@@ -33,6 +33,13 @@ fn shell() -> String {
 }
 
 /// The service worker template, as committed.
+/// The committed stylesheet, as the build publishes it.
+fn style() -> String {
+    let path = root().join("src/style.css");
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()))
+}
+
 fn worker_template() -> String {
     let path = root().join("src/service-worker.js");
     std::fs::read_to_string(&path)
@@ -68,7 +75,7 @@ fn tracked_files() -> Option<String> {
 /// `every_precached_file_is_published_by_the_build_script`). This list is what
 /// the workflow's site check uses, and it is written out by name on purpose: a
 /// count would not catch a file that is referenced but never written.
-const DIST_FILES: [&str; 8] = [
+const DIST_FILES: [&str; 9] = [
     "app.js",
     "app_bg.wasm",
     "icon.svg",
@@ -77,6 +84,7 @@ const DIST_FILES: [&str; 8] = [
     "index.html",
     "manifest.webmanifest",
     "service-worker.js",
+    "style.css",
 ];
 
 /// The files `build.rs` publishes, read out of the script itself.
@@ -385,30 +393,43 @@ fn the_loader_does_nothing_but_load_and_report_failure() {
 fn the_page_is_accessible_and_installable() {
     let page = shell();
     for required in [
-        "id=\"message\"",
-        "id=\"hello-button\"",
+        "id=\"board\"",
+        "id=\"pad\"",
+        "id=\"status\"",
         "id=\"error\"",
         "role=\"status\"",
         "aria-live",
-        "<button id=\"hello-button\" type=\"button\">",
         "rel=\"manifest\"",
         "rel=\"icon\"",
         "rel=\"apple-touch-icon\"",
         "<noscript>",
+        "id=\"notes\" type=\"button\" aria-pressed=",
     ] {
         assert!(page.contains(required), "the shell is missing {required}");
     }
+    // The stylesheet is its own file, so it must be linked — and it is what
+    // carries the rules this test is about.
     assert!(
-        page.contains("outline: 3px solid"),
+        page.contains("rel=\"stylesheet\" href=\"./style.css\""),
+        "the shell must link its stylesheet, relative to itself"
+    );
+    assert!(
+        !page.contains("<style"),
+        "the shell must not inline its styles: they live in src/style.css so the \
+         service worker can precache and version them as one file"
+    );
+    let css = style();
+    assert!(
+        css.contains("outline: 3px solid"),
         "focus must stay visible"
     );
     assert!(
-        page.contains("min-height: 44px"),
+        css.contains("min-height: 44px"),
         "touch targets must be large enough for mobile use"
     );
     assert!(
-        page.contains("prefers-color-scheme") && page.contains("prefers-reduced-motion"),
-        "the shell must respect both media queries"
+        css.contains("prefers-color-scheme") && css.contains("prefers-reduced-motion"),
+        "the stylesheet must respect both media queries"
     );
 }
 
@@ -492,7 +513,7 @@ fn no_status_line_is_frozen() {
             let rest = &page[at + 4..];
             rest.find('"').map(|end| &rest[..end])
         })
-        .filter(|id| !matches!(*id, "message" | "hello-button" | "error"))
+        .filter(|id| !matches!(*id, "title" | "pad-heading" | "error"))
         .collect();
     shown.sort_unstable();
 
@@ -519,7 +540,7 @@ fn the_button_has_one_consistent_name() {
     // the Rust.
     let shell_markup = visible_text(&page);
     assert!(
-        !shell_markup.contains("aria-label"),
+        !shell_markup.contains("aria-label="),
         "the shell must not hard-code an aria-label: the visible text is already \
          the accessible name, and a second name contradicts it"
     );
@@ -534,8 +555,15 @@ fn the_button_has_one_consistent_name() {
             if is_comment {
                 continue;
             }
+            // The forms that actually set one: an attribute in the shell, and
+            // a quoted property name in the Rust. A bare substring match would
+            // also catch `aria-labelledby`, which is the *right* way to name a
+            // group after the heading it sits under.
+            let sets_a_label = trimmed.contains("aria-label=")
+                || trimmed.contains("\"aria-label\"")
+                || trimmed.contains("aria_label");
             assert!(
-                !trimmed.contains("aria-label") && !trimmed.contains("aria_label"),
+                !sets_a_label,
                 "{source} sets an aria-label on a control that has visible text: {trimmed}\n\
                  The visible text is already the accessible name; a second one \
                  contradicts it"
@@ -543,21 +571,43 @@ fn the_button_has_one_consistent_name() {
         }
     }
 
-    // And the label must describe what the app does. "Say hello" is what the
-    // original template's button said, on an app that only printed a greeting;
-    // this app counts, so the label has to say so.
-    let shell_button = page
-        .split_once("<button id=\"hello-button\" type=\"button\">")
-        .expect("the app's one button")
-        .1
-        .split_once("</button>")
-        .expect("the end of the button")
-        .0;
-    assert_eq!(
-        shell_button.trim(),
-        "Add one",
-        "the button's label must describe what it does, not what it used to do"
-    );
+    // And every button the shell ships must say what it does, in words a
+    // person uses for this game. The template's "Add one" was a counter's
+    // label; a sudoku's controls are named for what they do to a cell.
+    let mut control_names: Vec<String> = Vec::new();
+    for (at, opening) in page.match_indices("<button id=") {
+        // `match_indices` yields the matched text, not what follows it.
+        let from_button = &page[at + opening.len()..];
+        let Some(tag_end) = from_button.find('>') else {
+            continue;
+        };
+        let Some(close) = from_button.find("</button>") else {
+            continue;
+        };
+        if close < tag_end {
+            continue;
+        }
+        let name = from_button[tag_end + 1..close].trim().to_string();
+        if !name.is_empty() {
+            control_names.push(name);
+        }
+    }
+    for expected in ["Notes", "Undo", "Erase", "Hint", "New puzzle", "Restart"] {
+        assert!(
+            control_names.iter().any(|name| name == expected),
+            "the shell has no control labelled {expected:?}; found {control_names:?}"
+        );
+    }
+    // A label must not describe a mechanism. Every one of these is a word the
+    // reader acts on rather than a name for how the app is put together.
+    for name in &control_names {
+        for banned in ["wasm", "rust", "generate", "compute", "sol"] {
+            assert!(
+                !name.to_lowercase().contains(banned),
+                "the control {name:?} is labelled for its mechanism"
+            );
+        }
+    }
 }
 
 /// The text inside the page's `<noscript>` element, or `""` if it has none.
@@ -788,7 +838,7 @@ fn the_scope_is_a_relative_directory_shared_with_the_worker() {
 /// it. The pin is the mechanism working as intended — a red test, a visible
 /// diff, a reason — so it stays, and the reason moves here with the change
 /// rather than being left in a commit message to rot.
-const ICON_SHA256: &str = "5a7e307c7d61b27b8717fbe183be58f074af6c4ff438014ed246e0007cc24867";
+const ICON_SHA256: &str = "d69bda21bbd3392e35a1acb2382dd8bc471f013a86d1a7145d8801329c4abca5";
 
 #[test]
 fn the_icon_is_the_committed_svg() {
@@ -813,13 +863,17 @@ fn the_icon_is_the_committed_svg() {
     // at the same time. 3:1 is the bar for a graphical object, and `#7a7a7a`
     // reaches 4.29:1 on white and 4.40:1 on this project's `#0f1117`.
     let icon_text = String::from_utf8_lossy(&bytes);
-    let fills: Vec<&str> = icon_text
+    let mut fills: Vec<&str> = icon_text
         .match_indices("fill=\"")
         .filter_map(|(at, _)| {
             let rest = &icon_text[at + 6..];
             rest.find('"').map(|end| &rest[..end])
         })
+        // `none` is not a colour: it is the absence of one, and it is how a
+        // stroked shape says "outline only".
+        .filter(|fill| *fill != "none")
         .collect();
+    fills.dedup();
     assert_eq!(
         fills,
         ["#7a7a7a"],
@@ -1475,7 +1529,7 @@ fn the_workflow_checks_the_built_site_rather_than_the_exit_status() {
     };
     let live = strip_yaml_comments(&pages);
 
-    // Every one of the eight files, by name. Naming them is the point: the
+    // Every one of the nine files, by name. Naming them is the point: the
     // failure this exists for is a `dist/` that looks publishable and is missing
     // something the page references, and a file nobody wrote does not change a
     // count.
@@ -1500,7 +1554,7 @@ fn the_workflow_checks_the_built_site_rather_than_the_exit_status() {
     let listed: Vec<&str> = expected.split_whitespace().collect();
     assert_eq!(
         listed, DIST_FILES,
-        "pages.yml's site check names these files; they must be exactly the eight the two \
+        "pages.yml's site check names these files; they must be exactly the nine the two \
          owners produce, in one list, derived from the same source",
     );
     // And it must fail on unexpected files as well as missing ones, checked by
@@ -1970,4 +2024,168 @@ fn strip_rust_comments(source: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// The app is frontend-only: a static site and nothing else.
+///
+/// The family's whole shape is that `dist/` is the product and any file host can
+/// serve it. That claim is cheap to state and easy to lose — one `[[bin]]`, one
+/// `axum` dependency or one `std::net::TcpListener` turns the site into something
+/// that needs a process of its own, and the first symptom would be a deploy that
+/// works locally and nowhere else.
+#[test]
+fn the_site_is_frontend_only() {
+    let manifest = std::fs::read_to_string(root().join("Cargo.toml")).expect("Cargo.toml");
+    let live: String = manifest
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        !live.contains("[[bin]]"),
+        "the crate must stay a library: no binary means no server to run"
+    );
+    assert!(
+        live.contains("crate-type = [\"cdylib\", \"rlib\"]"),
+        "the site is built from a cdylib; without it there is nothing to publish"
+    );
+
+    // A server dependency is the other way to lose it, and it is a one-line
+    // change that nothing else in the tree would notice.
+    for banned in [
+        "axum",
+        "actix",
+        "hyper",
+        "tiny_http",
+        "warp",
+        "rocket",
+        "tide",
+    ] {
+        assert!(
+            !live.to_lowercase().contains(banned),
+            "{banned} is a server framework; this app is served as static files"
+        );
+    }
+
+    // And the sources must not open a socket or bind a port.
+    for source in ["src/lib.rs", "src/board.rs", "src/game.rs", "src/ui.rs"] {
+        let text = std::fs::read_to_string(root().join(source))
+            .unwrap_or_else(|error| panic!("reading {source}: {error}"));
+        let code = strip_rust_comments(&text);
+        // `bind(` alone would also match this app's own `bind(window, ...)`
+        // call, which binds listeners to elements. These are the socket APIs.
+        for banned in [
+            "TcpListener",
+            "TcpStream",
+            "UdpSocket",
+            "std::net",
+            "socket2",
+        ] {
+            assert!(
+                !code.contains(banned),
+                "{source} uses {banned}: a static site cannot open a socket"
+            );
+        }
+    }
+
+    // The published site is exactly the files a browser needs.
+    let worker = worker_template();
+    let precached = precached_by_the_worker();
+    assert!(
+        precached.len() >= 8,
+        "the worker must precache the whole shell, found {precached:?}"
+    );
+    let _ = worker;
+}
+
+/// The colour-scheme blocks change colours and nothing else.
+///
+/// Dark is the default and light is chosen by the system, in CSS alone so the
+/// right palette is there before the first paint. The light block is where a
+/// layout change hides: one `padding` or `font-size` in the "colours" override
+/// makes the two schemes different products, and because it only shows when
+/// someone switches their phone at the wrong moment, nobody would report it.
+#[test]
+fn the_light_scheme_changes_colours_and_nothing_else() {
+    let page = shell();
+    // The palette lives in the stylesheet, which is its own file now.
+    let stylesheet = style();
+
+    let Some(start) = stylesheet.find("@media (prefers-color-scheme: light)") else {
+        panic!("the stylesheet has no light-scheme block, so it cannot follow the system");
+    };
+    // The block is `@media (...) {  :root { ... } }`: two closing braces. Find
+    // the end by counting them, so a nested rule cannot truncate the body.
+    let block = &stylesheet[start..];
+    let mut depth = 0usize;
+    let mut end = 0usize;
+    for (at, character) in block.char_indices() {
+        match character {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = at;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let block = &block[..=end];
+
+    // Every declaration in the block must set a custom property. A colour can
+    // only reach the page through one of the variables, which is what keeps one
+    // set of layout rules working for both schemes.
+    let mut declarations = 0usize;
+    for line in block.lines() {
+        let trimmed = line.trim().trim_end_matches(&[';', '}'][..]).trim();
+        if trimmed.is_empty()
+            || trimmed.starts_with("/*")
+            || trimmed.starts_with('*')
+            || trimmed.starts_with('}')
+            || trimmed.contains('{')
+            || trimmed.starts_with("@media")
+        {
+            continue;
+        }
+        let Some((property, _)) = trimmed.split_once(':') else {
+            continue;
+        };
+        let property = property.trim();
+        declarations += 1;
+        assert!(
+            property.starts_with("--") || property == "color-scheme",
+            "the light-scheme block sets {property:?}; it may change colours and \
+             color-scheme only, or the two schemes stop being the same app laid \
+             out the same way"
+        );
+        assert!(
+            !property.starts_with("--board"),
+            "the board's own size is layout, not colour: it must not be overridden \
+             per scheme"
+        );
+    }
+    assert!(
+        declarations > 8,
+        "the light-scheme block looks empty ({declarations} declarations), so the \
+         app would render its dark palette on a light phone"
+    );
+
+    // And the two schemes must be named for the system, not switched by a script.
+    assert!(
+        page.contains("media=\"(prefers-color-scheme: dark)\"")
+            && page.contains("media=\"(prefers-color-scheme: light)\""),
+        "both theme-color metas must follow the system's scheme"
+    );
+    let script = page
+        .split_once("<script type=\"module\">")
+        .expect("the one module script")
+        .1;
+    assert!(
+        !script.contains("matchMedia") && !script.contains("prefers-color-scheme"),
+        "the theme must be chosen in CSS: a script runs after the first paint, \
+         so the wrong palette is shown first"
+    );
 }

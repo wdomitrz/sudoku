@@ -101,6 +101,8 @@ struct App {
     /// The element each cell's digit is written into, so a digit and a pencil
     /// mark can coexist without either erasing the other.
     digit_slots: Vec<Element>,
+    /// The hidden element holding each cell's spoken name.
+    labels: Vec<Element>,
     note_slots: Vec<Vec<Element>>,
     /// The pencil marks last written to each cell, so a render can skip the
     /// ~700 element writes that unchanged marks would otherwise cost.
@@ -124,6 +126,7 @@ impl App {
         let board = element(document, "board").ok_or_else(|| JsValue::from_str("no #board"))?;
         let mut cells = Vec::with_capacity(CELLS);
         let mut digit_slots = Vec::with_capacity(CELLS);
+        let mut labels = Vec::with_capacity(CELLS);
         let mut note_slots = Vec::with_capacity(CELLS);
         for index in 0..CELLS {
             let cell = document
@@ -140,9 +143,15 @@ impl App {
             // marks a cell that has just had a digit erased from it.
             let digit_element = document.create_element("span")?;
             digit_element.set_class_name("digit");
+            // The digit and the pencil marks are the *same* information the
+            // spoken label carries, in a form a screen reader would read out as
+            // a bare number with no idea where it is. They are hidden from the
+            // accessibility tree and the label below is the cell's only name.
+            digit_element.set_attribute("aria-hidden", "true")?;
             cell.append_child(&digit_element)?;
             let notes = document.create_element("span")?;
             notes.set_class_name("notes");
+            notes.set_attribute("aria-hidden", "true")?;
             let mut slots = Vec::with_capacity(NOTE_SLOTS);
             for _ in 0..NOTE_SLOTS {
                 let slot = document.create_element("i")?;
@@ -151,6 +160,14 @@ impl App {
             }
             cell.append_child(&notes)?;
             board.append_child(&cell)?;
+            // The cell's own name, as an element rather than an attribute on
+            // the control: a hidden span is a real piece of text that the
+            // browser, a translation and a speech engine all read the same way,
+            // and it is the one form the shell's own markup never hard-codes.
+            let label = document.create_element("span")?;
+            label.set_class_name("visually-hidden");
+            cell.append_child(&label)?;
+            labels.push(label);
             digit_slots.push(digit_element);
             cells.push(cell);
             note_slots.push(slots);
@@ -165,6 +182,7 @@ impl App {
             next,
             cells,
             digit_slots,
+            labels,
             note_slots,
             shown_notes: [0; CELLS],
         })
@@ -186,11 +204,11 @@ impl App {
         for (index, cell) in cells.iter().enumerate() {
             let element = &self.cells[index];
             element.set_class_name(&cell.classes());
-            // The one call here that can fail, and the one whose failure is not
-            // worth acting on: a cell with no accessible name is still a cell
-            // the sighted reader can use, and there is no second place to report
-            // it that would not be worse than the missing label.
-            let _ = element.set_attribute("aria-label", &cell.label());
+            let label = &self.labels[index];
+            let wanted = cell.label();
+            if element_text(label) != wanted {
+                label.set_text_content(Some(&wanted));
+            }
             element.set_tab_index(if Some(index) == selected { 0 } else { -1 });
 
             // A digit and pencil marks never show together: a cell holding a
@@ -409,7 +427,7 @@ fn build_pad(document: &Document) -> Result<(), JsValue> {
         button.set_attribute("data-digit", &digit.to_string())?;
         // The digit is the button's text and the remaining count is the small
         // line under it, so the pad reads as "7, four left" to a screen reader
-        // without an `aria-label` saying the same thing twice.
+        // without a second name saying the same thing twice.
         button.set_text_content(Some(&format!("{digit}")));
         let count = document.create_element("small")?;
         button.append_child(&count)?;
@@ -698,8 +716,9 @@ impl App {
 /// depends on the last being true: register the worker, let a *new* worker take
 /// over when it is safe, and ask the browser to keep the cached copy on disk.
 async fn keep_offline(window: Window) {
-    if let Err(error) = register_worker(&window).await {
-        warn("offline support is unavailable", &error);
+    match register_worker(&window).await {
+        Ok(container) => release_stale_registrations(&window, &container).await,
+        Err(error) => warn("offline support is unavailable", &error),
     }
     keep_storage(&window).await;
 }
@@ -712,7 +731,7 @@ async fn keep_offline(window: Window) {
 /// will not grant, or a script that fails to fetch. Offline support is then
 /// absent and the app is otherwise unaffected, which is why this is a warning
 /// rather than a failed start.
-async fn register_worker(window: &Window) -> Result<(), JsValue> {
+async fn register_worker(window: &Window) -> Result<web_sys::ServiceWorkerContainer, JsValue> {
     let container = window.navigator().service_worker();
 
     // The scope is stated rather than inherited: left to itself, a
@@ -773,7 +792,84 @@ async fn register_worker(window: &Window) -> Result<(), JsValue> {
         .add_event_listener_with_callback("controllerchange", controller.as_ref().unchecked_ref());
     controller.forget();
 
-    Ok(())
+    Ok(container)
+}
+
+/// Hand this app's own URLs back to the current worker.
+///
+/// A registration is kept by the browser, not by the tab, so it outlives the
+/// page that made it and keeps answering for its scope until something
+/// explicitly unregisters it. That is how a page on this origin comes to be
+/// served by a worker installed for a *different* app, long after that app was
+/// closed — and a reload, a newer version or a newer worker cannot fix it,
+/// because the newer worker only takes control where its own scope reaches.
+///
+/// So: unregister any registration whose scope covers this app's directory but
+/// is not this app's directory. Failures are ignored — this is best-effort
+/// cleanup of state this app did not create, and a browser that refuses leaves
+/// the reader no worse off.
+async fn release_stale_registrations(window: &Window, container: &web_sys::ServiceWorkerContainer) {
+    let Ok(registrations) = JsFuture::from(container.get_registrations()).await else {
+        return;
+    };
+    let Ok(array) = registrations.dyn_into::<js_sys::Array>() else {
+        return;
+    };
+
+    // This app's own directory, as an absolute URL with a trailing slash.
+    let Ok(home) = window.location().href() else {
+        return;
+    };
+    let Ok(ours) = web_sys::Url::new_with_base(&home, "./") else {
+        return;
+    };
+    let ours = ours.href();
+
+    for entry in array.iter() {
+        let Ok(registration) = entry.dyn_into::<web_sys::ServiceWorkerRegistration>() else {
+            continue;
+        };
+        let scope = registration.scope();
+        // Leave alone any scope that is this app's own, or narrower: a sibling
+        // app mounted inside this directory is legitimate and separate, and
+        // nothing there can intercept us. One test, because the two cases are
+        // the same one: `ours` begins with `scope`.
+        if ours.starts_with(&scope) {
+            continue;
+        }
+        // What is left is a scope that is a *strict* prefix of ours: a worker
+        // that would be consulted for this app's URLs while registered for more
+        // of the origin. Only our own worker qualifies — a different app's
+        // worker lives in a different directory, so unregistering it would break
+        // the app it belongs to.
+        let script = registration
+            .active()
+            .map(|worker| worker.script_url())
+            .unwrap_or_default();
+        if script_belongs_to_app(&script, &ours) {
+            match registration.unregister() {
+                Ok(promise) => {
+                    let _ = JsFuture::from(promise).await;
+                }
+                Err(error) => warn("stale service worker could not be released", &error),
+            }
+        }
+    }
+}
+
+/// Whether the worker script at `script` is this app's own worker, registered
+/// for more of the origin than this app's directory.
+///
+/// A wider scope means the script sits at the root of this app's own directory
+/// rather than below it: a sibling app's worker is in a sibling directory and
+/// does not match. `strip_suffix`, not `trim_end_matches` — the latter strips a
+/// *set of characters*, so it would eat a directory named `...e-worker.js` and
+/// call it ours.
+fn script_belongs_to_app(script: &str, ours: &str) -> bool {
+    match web_sys::Url::new(script) {
+        Ok(url) => url.href().strip_suffix("service-worker.js") == Some(ours),
+        Err(_) => false,
+    }
 }
 
 /// Ask a waiting worker to take over.

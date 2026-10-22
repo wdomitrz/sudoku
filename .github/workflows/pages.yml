@@ -227,7 +227,7 @@ jobs:
           # nothing that looks wrong. Three sibling workflows had exactly that.
           # The quoted delimiter also stops the shell expanding `$` inside the
           # body.
-          expected="app.js app_bg.wasm icon.svg icon-192.png icon-512.png index.html manifest.webmanifest service-worker.js"
+          expected="app.js app_bg.wasm icon.svg icon-192.png icon-512.png index.html manifest.webmanifest service-worker.js style.css"
           missing=""
           for file in $expected; do
             if [ -s "dist/${file}" ]; then
@@ -294,7 +294,7 @@ jobs:
               published = handle.read()
           assert published == source, "dist/icon.svg is not the committed icon"
           assert hashlib.sha256(source).hexdigest() == (
-              "5a7e307c7d61b27b8717fbe183be58f074af6c4ff438014ed246e0007cc24867"
+              "d69bda21bbd3392e35a1acb2382dd8bc471f013a86d1a7145d8801329c4abca5"
           ), "assets/icon.svg is no longer the author's original"
           print("  ok   dist/icon.svg is the committed icon")
 
