@@ -1,0 +1,300 @@
+name: build
+
+# Two builds, in order, because there are two targets. The order is not a
+# convenience: `build.rs` derives the service worker's cache version from the
+# bytes of every other file in `dist/`, and the wasm is one of them. Building the
+# host side first would pin the cache to whatever the previous build left behind,
+# and the job would publish an app whose cache never invalidates. So this runs
+# exactly what AGENTS.md and INSTRUCTIONS.md document, in the order they
+# document it.
+#
+# What the job is for: the wasm, the bindings and the whole site are build output
+# and are never committed, so nothing in the repository proves they still build,
+# or that the two steps still agree. That is the gap this closes -- it runs both
+# steps from a clean checkout and then inspects the `dist/` they produced, rather
+# than trusting a green job. Nothing is published here; `dist/` is left as a
+# workflow artifact.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Must match the `wasm-bindgen = "=0.2.128"` pin in Cargo.toml, exactly. A
+  # mismatched generator emits bindings the runtime will not load, and the page
+  # fails to start with "The app could not start" -- a failure that looks like an
+  # app bug and is not one.
+  WASM_BINDGEN_VERSION: 0.2.128
+
+jobs:
+  build:
+    name: Build the site
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
+        with:
+          # The app's target, and the only one the job needs. `dtolnay/rust-toolchain`
+          # takes the channel from `toolchain:`; `targets:` adds to it, so the two
+          # lines together are "stable, plus wasm32".
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+
+      - name: Cache the Cargo build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # The wasm and the host build share a `target/` directory but not a
+          # target triple, so cache both. A wasm-only cache would miss on every
+          # host build and a host-only cache on every wasm build.
+          key: ${{ job.job }}
+
+      - name: Install the pinned wasm-bindgen generator
+        run: |
+          set -euuo pipefail
+          # The official prebuilt binary, not `cargo install`. The CLI is pinned
+          # to one exact version, and `cargo install` would compile it from
+          # source -- minutes, and a second toolchain's worth of failure
+          # surface. The release publishes a musl static binary plus a
+          # `.sha256sum` per platform, so verify against that file and fail
+          # loudly rather than generating bindings from an unverified download.
+          #
+          # The digest is checked against the release's own checksum file, and
+          # then compared to the one recorded in this repository. Both, because
+          # they fail differently: the first catches a corrupted or truncated
+          # download, the second catches a legitimately re-uploaded release --
+          # which is the one an attacker would want, since only they can
+          # re-upload it.
+          version="$WASM_BINDGEN_VERSION"
+          target=x86_64-unknown-linux-musl
+          asset="wasm-bindgen-${version}-${target}.tar.gz"
+          base="https://github.com/rustwasm/wasm-bindgen/releases/download/${version}"
+          pinned=b51f0208fdff83515a787bd8ab9ac5865ed84dabb66d0c709957bb59793c645f
+
+          curl --fail --location --silent --show-error --retry 3 \
+            --output "/tmp/${asset}" "${base}/${asset}"
+          curl --fail --location --silent --show-error --retry 3 \
+            --output "/tmp/${asset}.sha256sum" "${base}/${asset}.sha256sum"
+
+          # The published checksum file names the asset `gh-release/<name>`,
+          # because that is where the release workflow unpacked it, so
+          # `sha256sum -c` against the download name alone finds no file to
+          # verify. Take the digest out of that file by field and check it
+          # ourselves -- first against what we actually downloaded, which
+          # catches a corrupted or truncated transfer, and then against the
+          # digest recorded in this repository, which catches a re-uploaded
+          # release. Only the release owner can re-upload, and that is exactly
+          # the case worth refusing rather than trusting.
+          published="$(awk '{print $1}' "/tmp/${asset}.sha256sum")"
+          test -n "$published" \
+            || { echo "::error::the release published an empty checksum for ${asset}"; exit 1; }
+          actual="$(sha256sum "/tmp/${asset}" | cut -d' ' -f1)"
+          test "$actual" = "$published" \
+            || { echo "::error::${asset} does not match its published checksum (${published}, got ${actual})"; exit 1; }
+          test "$actual" = "$pinned" \
+            || { echo "::error::${asset} matches its published checksum but not the digest recorded in the repository; re-verify it before accepting this download"; exit 1; }
+          echo "${asset}: ${actual} verified against the release and the repository"
+
+          mkdir -p "$HOME/.cargo/bin"
+          tar --extract --gzip --file "/tmp/${asset}" \
+            --directory "$HOME/.cargo/bin" \
+            --strip-components 1 \
+            "wasm-bindgen-${version}-${target}/wasm-bindgen"
+          chmod +x "$HOME/.cargo/bin/wasm-bindgen"
+          # Refuse to build at all on a version mismatch, with a message that
+          # names the fix rather than leaving a broken `dist/` behind.
+          test "$("$HOME/.cargo/bin/wasm-bindgen" --version)" = "wasm-bindgen ${version}" \
+            || { echo "::error::the installed generator does not report ${version}"; exit 1; }
+          echo "wasm-bindgen $("$HOME/.cargo/bin/wasm-bindgen" --version) ready"
+
+      - name: Build the app (wasm target)
+        run: |
+          set -eu
+          cargo build --locked --lib --target wasm32-unknown-unknown --release
+
+      - name: Generate the web bindings
+        run: |
+          set -eu
+          # Writes dist/app.js and dist/app_bg.wasm -- the app itself. They exist
+          # nowhere else in the tree, and nothing committed would notice them
+          # going stale. `--out-name app` is fixed across the whole family of
+          # apps so the shell test is literally the same file in each repo.
+          wasm-bindgen --target web --no-typescript --out-dir dist --out-name app \
+            target/wasm32-unknown-unknown/release/sudoku.wasm
+
+      - name: Build the rest of the site
+        run: |
+          set -eu
+          # `build.rs` adds the six files it owns -- the shell, the service
+          # worker, both install icons, the manifest -- and derives the worker's
+          # cache version from the bytes of all of them. It must run after the
+          # bindings step: the version is hashed from what the previous step
+          # wrote.
+          #
+          # The touch is not redundant. `build.rs` writes into the source tree,
+          # not into OUT_DIR, so Cargo cannot tell that anything changed and will
+          # not re-run it for a second, otherwise identical invocation. The first
+          # build after the bindings step only recompiles the crate; the second
+          # would be a no-op and copy nothing -- leaving `dist/` with the two wasm
+          # artefacts and none of the six shell files, which is the exact
+          # half-built site this shape has hit before. A fresh CI runner has
+          # nothing to compile at all and reproduces it every time, so this step
+          # would be red on its first commit.
+          touch build.rs
+          cargo build --release --locked
+
+      - name: Check the built site
+        run: |
+          set -eu
+          # No test can assert on `dist/`: it is gitignored, so the release
+          # gate's exported tree never has it (see tests/shell.rs). The build is
+          # therefore the only thing that ever checks it -- so this checks it,
+          # rather than trusting a green job to mean the site is whole.
+          #
+          # A green build that produced four of the eight files is exactly the
+          # failure this shape has already had: `write_tree` once swapped the
+          # whole directory and took the wasm with it, leaving a
+          # publishable-looking site with no app in it. Verify the file list, not
+          # the exit status.
+          # Every one of the eight files, by name. Naming them is the point: the
+          # failure this check exists for is a `dist/` that looks publishable and
+          # is missing something the page or the worker references -- a file
+          # that is referenced but never written does not show up as a count.
+          #
+          # The Python below is a `<<'PY'` heredoc, not `python3 -c`, and it must
+          # stay one. An indented `python3 -c "…"` body is quoted by the shell
+          # before Python ever sees it, so a single quote in the body ends the
+          # string early and the failure is a shell parse error pointing at
+          # nothing that looks wrong. Three sibling workflows had exactly that.
+          # The quoted delimiter also stops the shell expanding `$` inside the
+          # body, which a JSON or shell check here would otherwise mangle.
+          expected="app.js app_bg.wasm icon.svg icon-192.png icon-512.png index.html manifest.webmanifest service-worker.js"
+          missing=""
+          for file in $expected; do
+            if [ -s "dist/${file}" ]; then
+              echo "  ok   dist/${file} ($(stat -c%s "dist/${file}") bytes)"
+            else
+              missing="${missing} ${file}"
+            fi
+          done
+          # One pattern per line: `grep -x -F -v -f` reads fixed strings from a
+          # file, one per line. Matching the whole space-separated list in one
+          # pattern matches nothing, so every file reads as unexpected and the
+          # check fails on a perfectly good build.
+          printf '%s\n' $expected >/tmp/expected-files
+          extra="$(cd dist && ls | grep -x -F -v -f /tmp/expected-files || true)"
+          if [ -n "$missing" ] || [ -n "$extra" ]; then
+            echo "::error::the site is incomplete -- missing:${missing:- none}; unexpected:${extra:- none}"
+            exit 1
+          fi
+          # A file of a few bytes is a truncated write, not a successful build.
+          test -s dist/app_bg.wasm || { echo "::error::the app wasm is empty"; exit 1; }
+          # The cache version is derived at build time, so an unsubstituted
+          # placeholder would ship a service worker that never invalidates.
+          if grep -q '__VERSION__' dist/service-worker.js; then
+            echo "::error::dist/service-worker.js still carries the __VERSION__ placeholder"
+            exit 1
+          fi
+          # The bindings must actually be bindings: the page loads this file
+          # with a dynamic import, so a truncated one fails only in a browser,
+          # long after the build looked fine.
+          grep -q 'export' dist/app.js \
+            || { echo "::error::dist/app.js carries no exports; the page's dynamic import would fail"; exit 1; }
+          # The install icons are derived from the committed SVG, the SVG is
+          # published beside them, and the manifest has to agree with what was
+          # actually rasterized -- which is the whole reason `build.rs`
+          # assembles the manifest rather than copying a file.
+          python3 - <<'PY'
+          import hashlib, json
+          # The published SVG must be the committed icon, byte for byte. The
+          # page links it and the worker precaches it, so a drift here is both
+          # a wrong favicon and an install that fails.
+          #
+          # The digest below is the author's original and must equal
+          # ICON_SHA256 in tests/shell.rs -- the same value in two places,
+          # asserted equal by `both_workflows_pin_the_icon_the_repository_still_has`.
+          # It was NOT updated when the icon changed on 2026-10-01 (the `P` glyph
+          # gave way to three bars in a mid grey), because that commit touched
+          # assets/, src/ and tests/ and not .github/. This workflow therefore sat
+          # red from that commit until 2026-10-02, when adding `pages.yml` forced
+          # the check to be run for real. The test named above exists so the two
+          # copies cannot diverge again -- including the copy in `pages.yml`.
+          with open("assets/icon.svg", "rb") as handle:
+              source = handle.read()
+          with open("dist/icon.svg", "rb") as handle:
+              published = handle.read()
+          assert published == source, "dist/icon.svg is not the committed icon"
+          assert hashlib.sha256(source).hexdigest() == (
+              "5a7e307c7d61b27b8717fbe183be58f074af6c4ff438014ed246e0007cc24867"
+          ), "assets/icon.svg is no longer the author's original"
+          print("  ok   dist/icon.svg is the committed icon")
+
+          with open("dist/manifest.webmanifest", encoding="utf-8") as handle:
+              manifest = json.load(handle)
+          assert manifest["icons"] == [
+              {"src": f"icon-{size}.png", "sizes": f"{size}x{size}",
+               "type": "image/png", "purpose": "any maskable"}
+              for size in (192, 512)
+          ], manifest["icons"]
+          for key in ("id", "start_url", "scope"):
+              assert manifest[key] == "./", f"{key} must be relative"
+          print("  ok   manifest agrees with the rasterized icons and mounts anywhere")
+          PY
+
+      - name: Run the tests
+        run: cargo test --locked
+
+      - name: Lint
+        run: |
+          set -eu
+          # Both targets, as AGENTS.md requires. The crate denies warnings, but
+          # only for the target being compiled, so a clean host build says
+          # nothing about the wasm one.
+          #
+          # The wasm leg must be built with the same cfg the crate is built
+          # with. `web-sys` exposes an unstable form of several accessors under
+          # `--cfg=web_sys_unstable_apis`, and the two forms can differ in
+          # *type* -- `MouseEvent::client_x` is `i32` on the stable path and
+          # `f64` on the unstable one, and `PointerEvent` inherits it. Code that
+          # only type-checks under one of them fails to compile under the other,
+          # in opposite directions, so a leg missing the cfg is not a weaker
+          # check: it lints a different program from the one that ships.
+          #
+          # This crate uses no unstable APIs, so there is no `RUSTFLAGS` in
+          # this file's `env:` above and the two forms are equivalent here --
+          # verified 2026-10-02 by a clean wasm build with no cfg of any kind.
+          # That is the correct state, not an omission: adding the cfg to a repo
+          # that does not need it is what lints the *different* program, and it
+          # is what copying `chess_clock`'s workflow into a repo that does not
+          # use the Screen Wake Lock would do. An earlier version of this
+          # comment said an app that uses unstable APIs "must export the cfg for
+          # this step, the way `chwazi` does". That was false on two counts:
+          # `chwazi` uses no unstable API either, and it deliberately sets no
+          # `RUSTFLAGS`, with a long note in its own build.yml saying why. The
+          # instruction that survives is the last one -- lint both targets with
+          # the cfg the crate is actually built with, whatever that is.
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo clippy --locked --lib --target wasm32-unknown-unknown -- -D warnings
+
+      - name: Upload the built site
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          # No CDN: the site is small, and a copy that cannot be evicted is a
+          # copy that will still be downloadable after a bad build.
+          retention-days: 7

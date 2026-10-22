@@ -1,0 +1,6 @@
+target/
+# Build output, and the reason this is a Rust PWA template at all: `dist/` is the
+# published site, and it is derived from committed sources by `build.rs` plus
+# `wasm-bindgen`. It is reproducible, so committing it would only mean shipping
+# a stale copy of the app.
+dist/
