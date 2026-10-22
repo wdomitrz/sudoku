@@ -1,9 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Sudoku">
-  <!-- The icon: a sudoku grid, at the size the eye can actually resolve. A real
-       9×9 is 57 px per cell at 512 and reads as grey mush at the 192 px the
-       launcher uses, so this is the 3×3 box structure with a few cells filled —
-       the shape a puzzle has before it is solved, which is also the only thing
-       that distinguishes a sudoku from a spreadsheet.
+  <!-- The icon: a sudoku grid, sized the way the bot's own icon is sized.
+
+       The drawing sits inside the maskable safe zone. Android crops an
+       installed app's icon with whatever mask the launcher uses — a circle, a
+       squircle, a rounded square — and only the middle 80% of the image is
+       guaranteed to survive it, so anything drawn up to the edges loses its
+       edges. The first version of this file filled 78% of the canvas and read
+       as too big on Android for exactly that reason. The glyph below is 320 of
+       512 — 62.5%, the proportion the bot icon uses — which leaves room for the
+       mask, for the launcher's own padding, and for the icon to look deliberate
+       rather than clipped.
 
        One colour, on a transparent ground, at the measured midpoint between a
        light and a dark surface: a single static icon cannot clear 4.5:1 on both
@@ -11,15 +17,18 @@
        3:1 is the bar for a graphical object. Every install icon is rasterized
        from this file at build time; this is the source of truth, never a PNG. -->
   <g fill="none" stroke="#7a7a7a" stroke-linecap="round">
-    <rect x="56" y="56" width="400" height="400" rx="34" stroke-width="30"/>
-    <path d="M189.33 56v400M322.67 56v400M56 189.33h400M56 322.67h400" stroke-width="18"/>
+    <!-- The outer grid: 320 wide, centred in 512, so 96 to 416. -->
+    <rect x="96" y="96" width="320" height="320" rx="26" stroke-width="24"/>
+    <!-- The 3×3 box rules, at a third and two thirds of the way across. -->
+    <path d="M202.67 96v320M309.33 96v320M96 202.67h320M96 309.33h320" stroke-width="14"/>
   </g>
-  <!-- Four placed digits, as blocks: the puzzle part-way through, which is what
-       a sudoku in progress looks like at a glance. -->
+  <!-- Four placed cells: a puzzle part-way through, which is what a sudoku in
+       progress looks like at a glance, and the only thing that distinguishes it
+       from a spreadsheet at launcher size. -->
   <g fill="#7a7a7a">
-    <rect x="86" y="86" width="72" height="72" rx="12"/>
-    <rect x="354" y="86" width="72" height="72" rx="12"/>
-    <rect x="86" y="354" width="72" height="72" rx="12"/>
-    <rect x="220" y="220" width="72" height="72" rx="12"/>
+    <rect x="118" y="118" width="60" height="60" rx="10"/>
+    <rect x="334" y="118" width="60" height="60" rx="10"/>
+    <rect x="118" y="334" width="60" height="60" rx="10"/>
+    <rect x="226" y="226" width="60" height="60" rx="10"/>
   </g>
 </svg>

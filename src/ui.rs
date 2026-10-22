@@ -314,15 +314,14 @@ impl App {
     }
 
     /// Say what just happened, out loud and on the line below the board.
+    ///
+    /// The reader can see which cell they touched; telling them it was row 4,
+    /// column 7 is a coordinate they have no use for, on the one line that could
+    /// carry something worth reading. So the line reports the *effect* — the
+    /// digit written, the pencil mark added, the clash — and says nothing at all
+    /// about a plain selection, which changes nothing they cannot see.
     fn announce(&mut self, report: Report) {
-        let words = report.words();
-        set_text(&self.document, "status", &words);
-        // A screen reader only announces a change, so an identical sentence is
-        // cleared and rewritten: picking two cells in the same column otherwise
-        // says the second one's position and nothing else.
-        if words.is_empty() {
-            set_text(&self.document, "status", "");
-        }
+        set_text(&self.document, "status", &report.words());
     }
 
     /// Persist the game, if it is worth persisting.
@@ -339,14 +338,16 @@ impl App {
         self.window.local_storage().ok().flatten()
     }
 
-    /// Open or close the folded menu.
+    /// Show or hide the panel to match the checkbox.
+    ///
+    /// The checkbox owns the state; this only draws it. The panel is pinned to
+    /// the bottom of the screen, so opening it moves nothing — no scroll, and no
+    /// button sliding out from under the reader's thumb between the tap that
+    /// opened it and the tap that closes it.
     fn set_menu_open(&mut self, open: bool) {
         self.menu_open = open;
         if let Some(panel) = html_element(&self.document, "menu-panel") {
             panel.set_hidden(!open);
-        }
-        if let Some(toggle) = element(&self.document, "menu") {
-            let _ = toggle.set_attribute("aria-expanded", if open { "true" } else { "false" });
         }
     }
 
@@ -537,16 +538,20 @@ fn bind_menu(document: &Document, app: &Shared) {
         closure.forget();
     }
 
-    // The menu itself: one button that opens and closes the panel, saying which
-    // state it is in so a screen reader and the styling agree.
-    if let Some(toggle) = button(document, "menu") {
+    // The menu is a checkbox: the browser toggles it on any tap, drag-cancelled
+    // tap, key press or screen-reader activation, with no listener of ours. All
+    // this does is follow the box and keep the panel, the styling and the
+    // scroll position in step with it.
+    if let Some(toggle) = document
+        .get_element_by_id("menu")
+        .and_then(|element| element.dyn_into::<web_sys::HtmlInputElement>().ok())
+    {
         let shared = Rc::clone(app);
+        let input = toggle.clone();
         let closure = Closure::<dyn FnMut()>::new(move || {
-            let mut app = shared.borrow_mut();
-            let open = app.menu_open;
-            app.set_menu_open(!open);
+            shared.borrow_mut().set_menu_open(input.checked());
         });
-        listen(&toggle, "click", closure.as_ref().unchecked_ref());
+        listen(&toggle, "change", closure.as_ref().unchecked_ref());
         closure.forget();
     }
 

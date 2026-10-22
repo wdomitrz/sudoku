@@ -60,31 +60,56 @@
        the next puzzle, the marking setting, and the two buttons that throw the
        current board away. Folded away by default, because a player who is
        mid-puzzle wants four controls, not seven — and the two destructive ones
-       should not sit under a thumb that is aiming for Undo. -->
-  <button id="menu" type="button" aria-expanded="false" aria-controls="menu-panel">Menu</button>
+       should not sit under a thumb that is aiming for Undo.
+
+       It is a checkbox, not a button, and that is a fix rather than a style
+       choice: opening it used to depend on a `click` listener, and a tap on a
+       touch screen produced no `click` at all — only pointerdown/up and
+       touchstart/end. On a phone the menu simply did not open. A checkbox
+       toggles its own state on a tap, a tap cancelled by a drag, a keyboard
+       press and a screen reader's activation, all without a listener, so there
+       is no gesture left for the browser to interpret differently. The label is
+       what the reader taps; the input sits beside it, visually hidden and
+       focusable. -->
+  <input id="menu" type="checkbox" class="menu-toggle visually-hidden" aria-controls="menu-panel">
+  <label for="menu" class="menu-button"><span>Menu</span></label>
 </div>
 
+<!-- The sheet, with a scrim behind it. Both the scrim and the Done line are
+     `<label for="menu">`, which means tapping either one unchecks the checkbox
+     and closes the sheet — no listener, and the same gesture on a phone, a
+     keyboard and a screen reader. The scrim also stops a stray tap reaching the
+     board underneath, which matters because the board is what is being
+     covered. -->
 <div id="menu-panel" hidden>
-  <label for="difficulty">Difficulty</label>
-  <select id="difficulty">
-    <option value="easy">Easy</option>
-    <option value="gentle">Gentle</option>
-    <option value="medium">Medium</option>
-    <option value="tricky">Tricky</option>
-    <option value="hard">Hard</option>
-    <option value="expert">Expert</option>
-  </select>
+  <label for="menu" class="menu-scrim"></label>
+  <div class="menu-sheet">
+    <div class="menu-head">
+      <span>Puzzle</span>
+      <label for="menu" class="menu-done">Done</label>
+    </div>
 
-  <label for="marking">Marking</label>
-  <select id="marking">
-    <option value="off">No marking</option>
-    <option value="rules">Rule breaks only</option>
-    <option value="answer">Wrong digits too</option>
-  </select>
+    <label for="difficulty">Difficulty</label>
+    <select id="difficulty">
+      <option value="easy">Easy</option>
+      <option value="gentle">Gentle</option>
+      <option value="medium">Medium</option>
+      <option value="tricky">Tricky</option>
+      <option value="hard">Hard</option>
+      <option value="expert">Expert</option>
+    </select>
 
-  <div class="menu-actions">
-    <button id="new" type="button">New puzzle</button>
-    <button id="restart" type="button">Restart</button>
+    <label for="marking">Marking</label>
+    <select id="marking">
+      <option value="off">No marking</option>
+      <option value="rules">Rule breaks only</option>
+      <option value="answer">Wrong digits too</option>
+    </select>
+
+    <div class="menu-actions">
+      <button id="new" type="button">New puzzle</button>
+      <button id="restart" type="button">Restart</button>
+    </div>
   </div>
 </div>
 
