@@ -243,19 +243,8 @@ h1 {
 }
 
 #pad button { font-size: 1.15rem; font-weight: 600; }
-#pad button small {
-  font-family: var(--mono);
-  font-size: .6rem;
-  font-weight: 500;
-  color: var(--muted);
-}
-#pad button:active, #tools button:active, #menu button:active { filter: brightness(.92); }
-#pad button[disabled] {
-  /* A digit placed nine times is finished, not unavailable: it stays readable
-     and is still tappable, which is how a reader checks their work. */
-  color: var(--muted);
-}
-#pad button.done { color: var(--muted); opacity: .55; }
+#pad button:active, #tools button:active { filter: brightness(.92); }
+#tools #menu:active { filter: brightness(.92); }
 
 #tools {
   width: var(--board);
@@ -272,28 +261,86 @@ h1 {
 }
 #tools button:disabled { opacity: .45; }
 
-.menu {
+/* The folded menu: everything that is not playing, opened on request. Two
+   columns, label above control, so a long option name cannot squeeze a select
+   into a stub. */
+#menu-panel {
   width: var(--board);
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: .3rem;
-  align-items: stretch;
+  grid-template-columns: 1fr 1fr;
+  align-items: center;
+  gap: .4rem .5rem;
+  padding: .65rem;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: .5rem;
 }
 
-.menu button { font-size: .8rem; font-weight: 600; min-height: 44px; }
+#menu-panel label {
+  grid-column: span 1;
+  color: var(--muted);
+  font-size: .72rem;
+  font-weight: 600;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+}
 
-#difficulty {
-  min-height: 40px;
+#menu-panel select {
+  grid-column: span 1;
+  min-height: 44px;
   width: 100%;
   padding: 0 .5rem;
   color: var(--fg);
-  background: var(--surface);
+  background-color: var(--surface);
   border: 1px solid var(--line);
   border-radius: .45rem;
   font: inherit;
-  font-size: .8rem;
+  font-size: .85rem;
+  font-weight: 600;
+  /* The platform draws a select's arrow in its own ink, which on a dark page is
+     a dark triangle on a dark field. This is the page's own arrow, drawn from
+     `currentColor` so it follows the palette in both schemes. */
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+                    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 1.05rem) center, calc(100% - .72rem) center;
+  background-size: .32rem .32rem, .32rem .32rem;
+  background-repeat: no-repeat;
+}
+
+#menu-panel .menu-actions {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: .35rem;
+  margin-top: .15rem;
+}
+
+#menu-panel .menu-actions button {
+  all: unset;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  cursor: pointer;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: .45rem;
+  color: var(--fg);
+  font: inherit;
+  font-size: .85rem;
   font-weight: 600;
 }
+
+#menu-panel .menu-actions button:active { filter: brightness(.92); }
+
+/* The menu button is a control that opens a control, so it shows its state. */
+#tools #menu[aria-expanded="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
 
 /* The solved panel takes the pad's place rather than covering the board: the
    finished grid is the thing worth looking at. */

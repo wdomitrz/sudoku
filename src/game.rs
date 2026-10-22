@@ -139,6 +139,70 @@ impl Cell {
     }
 }
 
+/// How the board flags what the player has written.
+///
+/// Three answers, because they are three different games, and none of them is
+/// the wrong way to play. `Rules` is the default: a digit is flagged only when
+/// it breaks a rule of sudoku, which is the one thing the grid itself knows
+/// without consulting the answer. `Answer` also flags a digit that fits but is
+/// not the right one, which does the checking for you. `Off` flags nothing, for
+/// someone solving on paper terms who wants the board to stay quiet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Marking {
+    /// Flag nothing: the grid is what the player wrote, and nothing else.
+    Off,
+    /// Flag a digit only when it repeats in its row, column or box.
+    Rules,
+    /// Flag a digit that is not the answer's, whether or not it repeats.
+    Answer,
+}
+
+impl Marking {
+    /// Every setting, quietest first — the order the menu lists them in.
+    ///
+    /// `Off` first because that is the honest axis: how much the board tells you
+    /// runs from nothing, through what the rules alone can prove, to what only
+    /// the answer knows.
+    pub const ALL: [Self; 3] = [Self::Off, Self::Rules, Self::Answer];
+
+    /// The word for this setting, as the menu shows it.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Off => "No marking",
+            Self::Rules => "Rule breaks only",
+            Self::Answer => "Wrong digits too",
+        }
+    }
+
+    /// What this setting means, in one sentence, for the line under the board.
+    #[must_use]
+    pub const fn sentence(self) -> &'static str {
+        match self {
+            Self::Off => "Nothing will be marked",
+            Self::Rules => "Only a digit that repeats in its row, column or box will be marked",
+            Self::Answer => "A digit that is not the answer's will be marked",
+        }
+    }
+
+    /// The setting as stored and parsed, so a saved game survives a change to
+    /// the visible wording.
+    #[must_use]
+    pub const fn slug(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Rules => "rules",
+            Self::Answer => "answer",
+        }
+    }
+
+    /// The setting a stored slug names, or `None`.
+    #[must_use]
+    pub fn from_slug(slug: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|entry| entry.slug() == slug)
+    }
+}
+
 /// What just happened, in enough detail for the screen to say something useful
 /// and for a screen reader to say it out loud.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,15 +241,13 @@ pub enum Report {
     },
     /// The last move was taken back.
     Undone,
-    /// The answer filled a cell the player had not.
-    Hinted {
-        /// Which cell.
-        index: usize,
-        /// The digit revealed.
-        digit: u8,
-    },
     /// The puzzle is back to its clues.
     Restarted,
+    /// How wrong digits are marked was changed.
+    MarkingChanged {
+        /// The setting now in force.
+        marking: Marking,
+    },
     /// The last digit completed the grid.
     Won,
 }
@@ -240,12 +302,8 @@ impl Report {
                 )
             }
             Self::Undone => "Last move undone.".to_string(),
-            Self::Hinted { index, digit } => format!(
-                "Row {}, column {} is {digit}.",
-                row_of(index) + 1,
-                column_of(index) + 1
-            ),
             Self::Restarted => "Puzzle restarted.".to_string(),
+            Self::MarkingChanged { marking } => format!("{}.", marking.sentence()),
             Self::Won => "Solved.".to_string(),
         }
     }
@@ -257,8 +315,7 @@ impl Report {
             Self::Selected { index }
             | Self::Placed { index, .. }
             | Self::Noted { index, .. }
-            | Self::Erased { index }
-            | Self::Hinted { index, .. } => Some(index),
+            | Self::Erased { index } => Some(index),
             _ => None,
         }
     }
@@ -267,15 +324,11 @@ impl Report {
 /// Everything the screen needs to draw the game's own state.
 ///
 /// Strings rather than numbers because the words are this module's business:
-/// "04:12", "no mistakes", "47 left". The screen formats nothing.
+/// "04:12", "47 left". The screen formats nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Readout {
     /// Elapsed time, as a clock.
     pub clock: String,
-    /// How many wrong digits have been written.
-    pub mistakes: String,
-    /// How many cells are still empty.
-    pub remaining: String,
     /// What the puzzle is, for the line shown when it is solved.
     pub summary: String,
 }
@@ -288,10 +341,9 @@ pub struct Game {
     values: Grid,
     notes: [Digits; CELLS],
     difficulty: Difficulty,
+    marking: Marking,
     selected: Option<usize>,
     notes_mode: bool,
-    mistakes: u32,
-    hints: u32,
     elapsed: u32,
     running: bool,
     won: bool,
@@ -303,8 +355,6 @@ pub struct Game {
 struct Snapshot {
     values: Grid,
     notes: [Digits; CELLS],
-    mistakes: u32,
-    hints: u32,
     won: bool,
 }
 
@@ -318,10 +368,9 @@ impl Game {
             values: puzzle,
             notes: [0; CELLS],
             difficulty,
+            marking: Marking::Rules,
             selected: None,
             notes_mode: false,
-            mistakes: 0,
-            hints: 0,
             elapsed: 0,
             running: true,
             won: false,
@@ -346,6 +395,24 @@ impl Game {
     #[must_use]
     pub const fn selected(&self) -> Option<usize> {
         self.selected
+    }
+
+    /// How a placed digit is marked.
+    #[must_use]
+    pub const fn marking(&self) -> Marking {
+        self.marking
+    }
+
+    /// Change how a placed digit is marked.
+    ///
+    /// A setting about what the screen says, not about the puzzle, so it applies
+    /// to the game in progress and is remembered for the next one.
+    pub fn set_marking(&mut self, marking: Marking) -> Report {
+        if self.marking == marking {
+            return Report::Idle;
+        }
+        self.marking = marking;
+        Report::MarkingChanged { marking }
     }
 
     /// Whether the number pad writes pencil marks rather than digits.
@@ -399,8 +466,15 @@ impl Game {
                 value,
                 notes: self.notes[index],
                 given: !self.puzzle.is_empty(index),
-                wrong: value != 0 && value != self.solution.get(index),
-                conflict,
+                // Both fields are "should the board mark this", not "is it so":
+                // the same collision is a rule break either way, and the setting
+                // decides whether the player is told. A rule break needs only the
+                // grid; "wrong" needs the answer, which is why it is the last
+                // thing a player can turn on.
+                wrong: value != 0
+                    && self.marking == Marking::Answer
+                    && value != self.solution.get(index),
+                conflict: conflict && self.marking != Marking::Off,
                 selected,
                 peer: !selected && is_peer(selected_peers.as_ref(), index),
                 same: !selected && selected_digit != 0 && value == selected_digit,
@@ -412,38 +486,9 @@ impl Game {
     /// Everything the screen says about the game.
     #[must_use]
     pub fn readout(&self) -> Readout {
-        let empty = CELLS - self.values.filled();
-        let clock = clock_text(self.elapsed);
-        let mistakes = self.mistake_count();
-        let remaining = match empty {
-            0 => "complete".to_string(),
-            1 => "1 left".to_string(),
-            count => format!("{count} left"),
-        };
-        let summary = if self.hints == 0 {
-            format!("{} · {clock} · {mistakes}", self.difficulty.label())
-        } else {
-            let plural = if self.hints == 1 { "" } else { "s" };
-            format!(
-                "{} · {clock} · {mistakes} · {} hint{plural}",
-                self.difficulty.label(),
-                self.hints
-            )
-        };
         Readout {
-            clock,
-            mistakes,
-            remaining,
-            summary,
-        }
-    }
-
-    /// The mistake count in words. The one place it becomes a sentence.
-    fn mistake_count(&self) -> String {
-        match self.mistakes {
-            0 => "no mistakes".to_string(),
-            1 => "1 mistake".to_string(),
-            count => format!("{count} mistakes"),
+            clock: clock_text(self.elapsed),
+            summary: format!("{} · {}", self.difficulty.label(), clock_text(self.elapsed)),
         }
     }
 
@@ -516,7 +561,6 @@ impl Game {
             };
         }
 
-        let before = self.values.get(index);
         let correct = self.solution.get(index) == digit;
         let completed_digit = correct && self.remaining_of(digit) == 1;
         self.snapshot();
@@ -529,11 +573,10 @@ impl Game {
             for peer in peers(index) {
                 self.notes[peer] &= !bit(digit);
             }
-        } else if before != digit {
-            // Re-entering the same wrong digit is not a second mistake: it is
-            // the same one. Only a new entry counts.
-            self.mistakes = self.mistakes.saturating_add(1);
         }
+        // A wrong digit is left on the board, marked wrong, rather than counted
+        // or refused: the grid itself is the feedback, and a tally beside it
+        // turns a puzzle into a quiz.
         self.check_win();
         if self.won {
             return Report::Won;
@@ -568,51 +611,15 @@ impl Game {
         };
         self.values = previous.values;
         self.notes = previous.notes;
-        self.mistakes = previous.mistakes;
-        self.hints = previous.hints;
         self.won = previous.won;
         self.running = !self.won;
         Report::Undone
-    }
-
-    /// Fill the selected empty cell from the answer, or the first empty cell
-    /// when nothing is selected.
-    ///
-    /// A hint never counts as a mistake, and it clears itself out of the
-    /// neighbours' pencil marks like a correct entry does.
-    pub fn hint(&mut self) -> Report {
-        if self.won {
-            return Report::Idle;
-        }
-        let index = match self.selected {
-            Some(index) if self.values.get(index) == 0 => index,
-            _ => match (0..CELLS).find(|&index| self.values.get(index) == 0) {
-                Some(index) => index,
-                None => return Report::Idle,
-            },
-        };
-        let digit = self.solution.get(index);
-        if digit == 0 {
-            return Report::Idle;
-        }
-        self.snapshot();
-        self.values.set(index, digit);
-        self.notes[index] = 0;
-        for peer in peers(index) {
-            self.notes[peer] &= !bit(digit);
-        }
-        self.hints = self.hints.saturating_add(1);
-        self.selected = Some(index);
-        self.check_win();
-        Report::Hinted { index, digit }
     }
 
     /// Put the puzzle back to its clues, keeping the difficulty.
     pub fn restart(&mut self) -> Report {
         self.values = self.puzzle;
         self.notes = [0; CELLS];
-        self.mistakes = 0;
-        self.hints = 0;
         self.elapsed = 0;
         self.won = false;
         self.running = true;
@@ -647,8 +654,6 @@ impl Game {
         self.history.push(Snapshot {
             values: self.values,
             notes: self.notes,
-            mistakes: self.mistakes,
-            hints: self.hints,
             won: self.won,
         });
     }
@@ -674,11 +679,10 @@ impl Game {
                 },
             );
         format!(
-            "{VERSION};{};{};{};{};{};{};{notes}",
+            "{VERSION};{};{};{};{};{};{notes}",
             self.difficulty.slug(),
+            self.marking.slug(),
             self.elapsed,
-            self.mistakes,
-            self.hints,
             self.values.to_line(),
             self.puzzle.to_line(),
         )
@@ -697,9 +701,8 @@ impl Game {
             return None;
         }
         let difficulty = Difficulty::from_slug(fields.next()?)?;
+        let marking = Marking::from_slug(fields.next()?)?;
         let elapsed = parse_bounded(fields.next()?, 24 * 60 * 60)?;
-        let mistakes = parse_bounded(fields.next()?, 9999)?;
-        let hints = parse_bounded(fields.next()?, 9999)?;
         let values = Grid::parse(fields.next()?)?;
         let puzzle = Grid::parse(fields.next()?)?;
         let notes_hex = fields.next()?;
@@ -736,10 +739,9 @@ impl Game {
             values,
             notes,
             difficulty,
+            marking,
             selected: None,
             notes_mode: false,
-            mistakes,
-            hints,
             elapsed,
             running: !won,
             won,
@@ -807,6 +809,20 @@ mod tests {
             .expect("an empty peer")
     }
 
+    /// Fill one cell with the answer, as a player reading the solution would.
+    /// The app no longer offers this, so it is test-only.
+    fn fill_at(game: &mut Game, index: usize) {
+        let digit = game.solution.get(index);
+        game.select(Some(index));
+        game.enter(digit);
+    }
+
+    /// Fill the first empty cell, keeping the helper above in one place.
+    fn fill_first_empty(game: &mut Game) {
+        let index = first_empty(game);
+        fill_at(game, index);
+    }
+
     /// The first cell that is empty, in reading order.
     fn first_empty(game: &Game) -> usize {
         game.cells()
@@ -828,8 +844,8 @@ mod tests {
         assert!(game.is_running());
         assert_eq!(game.selected(), None);
         assert_eq!(game.readout().clock, "00:00");
-        assert_eq!(game.readout().mistakes, "no mistakes");
-        assert_eq!(game.readout().remaining, "51 left");
+        // Nothing counts the empty cells at the reader: the board is the count.
+        assert_eq!(game.readout().summary, "Medium · 00:00");
     }
 
     #[test]
@@ -880,37 +896,96 @@ mod tests {
             0,
             "a placed digit is struck out of the neighbours' pencil marks"
         );
-        assert_eq!(game.readout().mistakes, "no mistakes");
     }
 
     #[test]
-    fn a_wrong_digit_is_kept_visible_and_counted_once() {
-        let mut game = game();
+    fn a_wrong_digit_is_kept_and_flagged_only_as_far_as_the_setting_says() {
+        let game = game();
         let index = first_empty(&game);
         let answer = game.solution.get(index);
         let wrong = if answer == 9 { 1 } else { answer + 1 };
-        game.select(Some(index));
 
-        let report = game.enter(wrong);
-        assert!(matches!(report, Report::Placed { correct: false, .. }));
-        assert!(game.cells()[index].wrong);
-        assert_eq!(game.readout().mistakes, "1 mistake");
-        // The same wrong digit again is the same mistake, not a second one.
-        game.enter(wrong);
-        assert_eq!(game.readout().mistakes, "1 mistake");
-        // A different wrong digit is a new attempt.
-        let other = if wrong == 9 { 1 } else { wrong + 1 };
-        let other = if other == answer {
-            if other == 9 {
-                1
-            } else {
-                other + 1
+        // A wrong digit is never refused and never counted: it stays on the
+        // board, and whether it is flagged is the reader's choice.
+        for marking in Marking::ALL {
+            let mut game = game.clone();
+            game.set_marking(marking);
+            game.select(Some(index));
+            let report = game.enter(wrong);
+            assert!(matches!(report, Report::Placed { correct: false, .. }));
+            assert_eq!(game.cells()[index].value, wrong, "the digit stays put");
+            assert_eq!(
+                game.cells()[index].wrong,
+                marking == Marking::Answer,
+                "at {marking:?} the digit's marking is wrong={}",
+                game.cells()[index].wrong
+            );
+        }
+
+        // Nothing in the readout tallies mistakes, in any setting.
+        let readout = game.readout();
+        assert!(!format!("{readout:?}").to_lowercase().contains("mistake"));
+    }
+
+    #[test]
+    fn a_rule_break_is_flagged_unless_marking_is_off() {
+        // A digit the row already holds is a rule break: it needs no answer to
+        // detect, so it is the one thing flagged by default.
+        let game = game();
+        let index = first_empty(&game);
+        // Find a digit already placed in this cell's row.
+        let row = index / 9;
+        let taken = (0..9)
+            .map(|column| game.puzzle.get(row * 9 + column))
+            .find(|&digit| digit != 0 && digit != game.solution.get(index))
+            .expect("the row has a clue");
+
+        for marking in Marking::ALL {
+            let mut game = game.clone();
+            game.set_marking(marking);
+            game.select(Some(index));
+            game.enter(taken);
+            let cell = game.cells()[index];
+            assert_eq!(cell.value, taken);
+            assert_eq!(
+                cell.conflict,
+                marking != Marking::Off,
+                "at {marking:?} a repeated digit is flagged as {}",
+                cell.conflict
+            );
+            // And the flag is not the view's alone: the label says so too.
+            assert_eq!(
+                cell.label().contains("Repeats"),
+                marking != Marking::Off,
+                "at {marking:?} the cell's name should say whether it repeats"
+            );
+        }
+    }
+
+    #[test]
+    fn the_marking_setting_survives_a_reload_and_round_trips() {
+        let mut game = game();
+        assert_eq!(game.marking(), Marking::Rules, "rule breaks by default");
+        assert_eq!(
+            game.set_marking(Marking::Off),
+            Report::MarkingChanged {
+                marking: Marking::Off
             }
-        } else {
-            other
-        };
-        game.enter(other);
-        assert_eq!(game.readout().mistakes, "2 mistakes");
+        );
+        assert_eq!(
+            game.set_marking(Marking::Off),
+            Report::Idle,
+            "setting it twice is not a change"
+        );
+        let stored = game.to_stored();
+        let back = Game::from_stored(&stored).expect("a readable game");
+        assert_eq!(back.marking(), Marking::Off);
+        for marking in Marking::ALL {
+            assert_eq!(Marking::from_slug(marking.slug()), Some(marking));
+            assert!(!marking.label().is_empty());
+            assert!(!marking.sentence().is_empty());
+        }
+        assert_eq!(Marking::from_slug("clever"), None);
     }
 
     #[test]
@@ -959,13 +1034,13 @@ mod tests {
     }
 
     #[test]
-    fn undo_puts_back_the_digit_the_pencil_marks_and_the_mistake_count() {
+    fn undo_puts_back_the_digit_and_the_pencil_marks() {
         let mut game = game();
         let index = first_empty(&game);
         let answer = game.solution.get(index);
         let wrong = if answer == 9 { 1 } else { answer + 1 };
         // The clean readout is the one to come back to. Comparing against a
-        // readout taken *after* the mistake would pass only if undo did
+        // readout taken after the wrong digit would pass only if undo did
         // nothing at all.
         let clean = game.readout();
 
@@ -973,11 +1048,9 @@ mod tests {
         game.enter(wrong);
         game.erase();
 
-        // Two moves back: the erase, then the wrong digit. The mistake count
-        // has to come back with the digit, not survive it.
+        // Two moves back: the erase, then the wrong digit.
         assert_eq!(game.undo(), Report::Undone);
         assert_eq!(game.cells()[index].value, wrong, "the digit comes back");
-        assert_eq!(game.readout().mistakes, "1 mistake");
         assert_eq!(game.undo(), Report::Undone);
         assert_eq!(game.cells()[index].value, 0);
         assert_eq!(game.readout(), clean, "undo restores the whole readout");
@@ -1025,19 +1098,6 @@ mod tests {
     }
 
     #[test]
-    fn a_hint_fills_the_answer_and_is_never_a_mistake() {
-        let mut game = game();
-        let index = first_empty(&game);
-        game.select(Some(index));
-        let digit = game.solution.get(index);
-        assert_eq!(game.hint(), Report::Hinted { index, digit });
-        assert_eq!(game.cells()[index].value, digit);
-        assert!(!game.cells()[index].wrong);
-        assert_eq!(game.readout().mistakes, "no mistakes");
-        assert!(game.readout().summary.contains("1 hint"));
-    }
-
-    #[test]
     fn the_clock_runs_until_the_grid_is_solved() {
         let mut game = game();
         for _ in 0..61 {
@@ -1045,29 +1105,24 @@ mod tests {
         }
         assert_eq!(game.readout().clock, "01:01");
         while !game.is_won() {
-            game.hint();
+            fill_first_empty(&mut game);
         }
         assert!(!game.is_running());
         let stopped = game.readout().clock;
         game.tick();
         assert_eq!(game.readout().clock, stopped);
-        assert_eq!(game.readout().remaining, "complete");
-        assert_eq!(
-            game.readout().summary,
-            format!("Medium · {stopped} · no mistakes · 51 hints")
-        );
+        assert_eq!(game.readout().summary, format!("Medium · {stopped}"));
     }
 
     #[test]
     fn solving_the_last_cell_reports_a_win() {
         let mut game = game();
-        // Fill every cell but one from the answer, as a hint would.
+        // Fill every cell but one from the answer.
         let mut last = None;
         for index in 0..CELLS {
             if game.values.is_empty(index) {
                 if last.is_some() {
-                    game.select(Some(index));
-                    game.hint();
+                    fill_at(&mut game, index);
                 } else {
                     last = Some(index);
                 }
@@ -1092,7 +1147,6 @@ mod tests {
         assert_eq!(game.restart(), Report::Restarted);
         assert_eq!(game.cells()[index].value, 0);
         assert_eq!(game.readout().clock, "00:00");
-        assert_eq!(game.readout().mistakes, "no mistakes");
         assert_eq!(game.undo(), Report::Idle, "a restart cannot be undone");
     }
 
@@ -1154,7 +1208,7 @@ mod tests {
     fn a_solved_game_survives_storage_as_solved() {
         let mut game = game();
         while !game.is_won() {
-            game.hint();
+            fill_first_empty(&mut game);
         }
         let back = Game::from_stored(&game.to_stored()).expect("a readable game");
         assert!(back.is_won());
@@ -1193,12 +1247,13 @@ mod tests {
     fn the_stored_line_is_the_documented_width() {
         let stored = game().to_stored();
         let fields: Vec<&str> = stored.split(';').collect();
-        assert_eq!(fields.len(), 8);
+        assert_eq!(fields.len(), 7);
         assert_eq!(fields[0], "v1");
         assert_eq!(fields[1], "medium");
+        assert_eq!(fields[2], "rules");
+        assert_eq!(fields[4].len(), CELLS);
         assert_eq!(fields[5].len(), CELLS);
-        assert_eq!(fields[6].len(), CELLS);
-        assert_eq!(fields[7].len(), CELLS * NOTES_WIDTH);
+        assert_eq!(fields[6].len(), CELLS * NOTES_WIDTH);
     }
 
     #[test]
@@ -1228,7 +1283,6 @@ mod tests {
             Report::Restarted,
             Report::Won,
             Report::Selected { index },
-            Report::Hinted { index, digit: 4 },
             Report::Erased { index },
             Report::Noted {
                 index,

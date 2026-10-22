@@ -36,8 +36,6 @@
      live region is #status below and these are plain text. -->
 <div class="facts">
   <span id="clock">00:00</span>
-  <span id="mistakes">no mistakes</span>
-  <span id="remaining">81 left</span>
 </div>
 
 <!-- The grid: 81 buttons, written by the app on every change. Their names come
@@ -58,18 +56,36 @@
   <button id="notes" type="button" aria-pressed="false">Notes</button>
   <button id="undo" type="button">Undo</button>
   <button id="erase" type="button">Erase</button>
-  <button id="hint" type="button">Hint</button>
+  <!-- The menu holds everything that is not part of playing: the difficulty of
+       the next puzzle, the marking setting, and the two buttons that throw the
+       current board away. Folded away by default, because a player who is
+       mid-puzzle wants four controls, not seven — and the two destructive ones
+       should not sit under a thumb that is aiming for Undo. -->
+  <button id="menu" type="button" aria-expanded="false" aria-controls="menu-panel">Menu</button>
 </div>
 
-<div class="menu">
-  <label class="visually-hidden" for="difficulty">Difficulty</label>
+<div id="menu-panel" hidden>
+  <label for="difficulty">Difficulty</label>
   <select id="difficulty">
     <option value="easy">Easy</option>
+    <option value="gentle">Gentle</option>
     <option value="medium">Medium</option>
+    <option value="tricky">Tricky</option>
     <option value="hard">Hard</option>
+    <option value="expert">Expert</option>
   </select>
-  <button id="new" type="button">New puzzle</button>
-  <button id="restart" type="button">Restart</button>
+
+  <label for="marking">Marking</label>
+  <select id="marking">
+    <option value="off">No marking</option>
+    <option value="rules">Rule breaks only</option>
+    <option value="answer">Wrong digits too</option>
+  </select>
+
+  <div class="menu-actions">
+    <button id="new" type="button">New puzzle</button>
+    <button id="restart" type="button">Restart</button>
+  </div>
 </div>
 
 <!-- What just happened, in words, for anyone who is not watching the grid.
