@@ -369,32 +369,58 @@ impl Rng {
 
 /// How hard a puzzle is meant to be.
 ///
-/// Difficulty is a target number of clues, and that is all: a puzzle with fewer
-/// clues is a puzzle with more cells to deduce. It is an honest, checkable
-/// definition — every generated puzzle in [`Difficulty::ALL`] is proven to have
-/// exactly one answer — and it is not a claim about which techniques a solver
-/// needs. A human may find a 26-clue puzzle easy if the deductions cascade.
+/// Difficulty is a target number of clues, and that is all: fewer clues means
+/// more cells to deduce. It is an honest, checkable definition — every generated
+/// puzzle in [`Difficulty::ALL`] is proven to have exactly one answer — and it
+/// is not a claim about which techniques a solver needs: a 26-clue puzzle whose
+/// deductions cascade can feel easier than a 32-clue one that does not.
+///
+/// The last two tiers are where the clue count stops being generous and starts
+/// approaching a real limit. Dug out in random order, puzzles bottom out at 23
+/// to 26 clues before uniqueness refuses to give another one away (measured over
+/// eight seeds: 23, 23, 24, 24, 24, 26, 26, 26), so `Expert` and `Master` sit
+/// inside that band rather than below it. A tier that promised fewer would not
+/// be harder; it would be a puzzle with more than one answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Difficulty {
     /// Room to think: forty clues.
     Easy,
+    /// A gentler newspaper puzzle: thirty-six clues.
+    Gentle,
     /// The usual newspaper puzzle: thirty-two clues.
     Medium,
-    /// Few clues, and no guessing required: twenty-six.
+    /// Fewer clues and longer chains of deduction: twenty-nine.
+    Tricky,
+    /// No guessing required, and little help: twenty-six.
     Hard,
+    /// As few clues as uniqueness allows: twenty-four.
+    Expert,
 }
 
 impl Difficulty {
-    /// Every difficulty, easiest first.
-    pub const ALL: [Self; 3] = [Self::Easy, Self::Medium, Self::Hard];
+    /// Every difficulty, easiest first — the order the menu lists them in.
+    pub const ALL: [Self; 6] = [
+        Self::Easy,
+        Self::Gentle,
+        Self::Medium,
+        Self::Tricky,
+        Self::Hard,
+        Self::Expert,
+    ];
 
     /// How many clues this difficulty aims for.
+    ///
+    /// A target, not a promise: the dig stops when uniqueness says it must, so
+    /// the last two tiers can land a clue or two above their target.
     #[must_use]
     pub const fn clues(self) -> usize {
         match self {
             Self::Easy => 40,
+            Self::Gentle => 36,
             Self::Medium => 32,
+            Self::Tricky => 29,
             Self::Hard => 26,
+            Self::Expert => 24,
         }
     }
 
@@ -403,8 +429,11 @@ impl Difficulty {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Easy => "Easy",
+            Self::Gentle => "Gentle",
             Self::Medium => "Medium",
+            Self::Tricky => "Tricky",
             Self::Hard => "Hard",
+            Self::Expert => "Expert",
         }
     }
 
@@ -414,8 +443,11 @@ impl Difficulty {
     pub const fn slug(self) -> &'static str {
         match self {
             Self::Easy => "easy",
+            Self::Gentle => "gentle",
             Self::Medium => "medium",
+            Self::Tricky => "tricky",
             Self::Hard => "hard",
+            Self::Expert => "expert",
         }
     }
 
@@ -429,9 +461,12 @@ impl Difficulty {
     #[must_use]
     pub const fn next(self) -> Self {
         match self {
-            Self::Easy => Self::Medium,
-            Self::Medium => Self::Hard,
-            Self::Hard => Self::Easy,
+            Self::Easy => Self::Gentle,
+            Self::Gentle => Self::Medium,
+            Self::Medium => Self::Tricky,
+            Self::Tricky => Self::Hard,
+            Self::Hard => Self::Expert,
+            Self::Expert => Self::Easy,
         }
     }
 }
@@ -453,6 +488,13 @@ pub struct Puzzle {
 /// above that, and [`count_solutions`] treats exhaustion as "not proven unique",
 /// which keeps the clue rather than claiming an answer that was never checked.
 const NODE_BUDGET: u32 = 200_000;
+
+/// How many digging passes the generator will make.
+///
+/// Each pass is a full uniqueness check per remaining clue, so this bounds the
+/// work a new puzzle can cost: at four the worst measured case is well under a
+/// second in a browser, and a pass that removes nothing ends the loop early.
+const DIG_PASSES: usize = 4;
 
 /// Solve a grid: one complete grid that agrees with every clue, if there is one.
 #[must_use]
@@ -508,18 +550,39 @@ pub fn generate(difficulty: Difficulty, seed: u64) -> Puzzle {
     let solution = search.first.unwrap_or(empty);
 
     // Dig clues out, in random order, keeping only those whose removal leaves
-    // one answer.
+    // one answer. One pass stalls well above the target — the order it happened
+    // to take leaves clues that a different order would have removed — so a
+    // pass that still made progress is repeated, up to `DIG_PASSES`. That is
+    // what makes the deepest tiers reachable at all: dug to exhaustion in a
+    // single order, puzzles bottom out around 23 to 26 clues.
     let mut clues = solution;
-    let mut order: Vec<usize> = (0..CELLS).collect();
-    rng.shuffle(&mut order);
-    for index in order {
+    for _ in 0..DIG_PASSES {
         if clues.filled() <= difficulty.clues() {
             break;
         }
-        let held = clues.get(index);
-        clues.set(index, 0);
-        if count_solutions(&clues, 2) != 1 {
-            clues.set(index, held);
+        let mut order: Vec<usize> = (0..CELLS).collect();
+        rng.shuffle(&mut order);
+        let mut removed = false;
+        for index in order {
+            if clues.filled() <= difficulty.clues() {
+                break;
+            }
+            let held = clues.get(index);
+            if held == 0 {
+                continue;
+            }
+            clues.set(index, 0);
+            if count_solutions(&clues, 2) == 1 {
+                removed = true;
+            } else {
+                // A second answer: this clue has to stay.
+                clues.set(index, held);
+            }
+        }
+        if !removed {
+            // Nothing came out this time; another order would only be slower,
+            // not deeper.
+            break;
         }
     }
 
@@ -789,12 +852,34 @@ mod tests {
     }
 
     #[test]
-    fn harder_difficulties_have_fewer_clues() {
-        let easy = generate(Difficulty::Easy, 7).clues.filled();
-        let medium = generate(Difficulty::Medium, 7).clues.filled();
-        let hard = generate(Difficulty::Hard, 7).clues.filled();
-        assert!(easy > medium, "easy {easy} medium {medium}");
-        assert!(medium > hard, "medium {medium} hard {hard}");
+    fn every_tier_is_at_least_as_hard_as_the_one_before_it() {
+        // A dig stops when uniqueness refuses another clue, so a tier can land
+        // above its target; what must never happen is a later tier holding
+        // *more* clues than an earlier one, or any tier overshooting its target
+        // by more than the digging can explain.
+        for seed in [7u64, 11, 23] {
+            let counts: Vec<usize> = Difficulty::ALL
+                .iter()
+                .map(|&difficulty| generate(difficulty, seed).clues.filled())
+                .collect();
+            for (pair, difficulty) in counts.windows(2).zip(Difficulty::ALL) {
+                assert!(
+                    pair[0] >= pair[1],
+                    "the tiers must not get easier, got {counts:?} at seed {seed}"
+                );
+                assert!(
+                    pair[0] <= difficulty.clues() + 5,
+                    "{difficulty:?} holds {} clues against a target of {}",
+                    pair[0],
+                    difficulty.clues()
+                );
+            }
+            // The hardest tier is really dug out, not merely labelled: a puzzle
+            // that stalled at thirty clues under the name "Expert" would be the
+            // label lying.
+            let expert = *counts.last().expect("a last tier");
+            assert!(expert <= 26, "the hardest tier holds {expert} clues");
+        }
     }
 
     #[test]
@@ -809,11 +894,12 @@ mod tests {
     #[test]
     fn the_generator_is_bounded_work() {
         // Uniqueness is proven for every clue that is removed; this is the one
-        // test that would catch a generator that stopped terminating. Ten
-        // puzzles is a second of work at worst.
+        // test that would catch a generator that stopped terminating. The
+        // hardest tier digs deepest and so costs the most: four of those is a
+        // second or two of work, and the bound below is generous on purpose.
         let started = std::time::Instant::now();
         for seed in 100..104u64 {
-            let puzzle = generate(Difficulty::Hard, seed);
+            let puzzle = generate(Difficulty::Expert, seed);
             assert_eq!(count_solutions(&puzzle.clues, 2), 1);
         }
         assert!(
@@ -828,7 +914,12 @@ mod tests {
         for difficulty in Difficulty::ALL {
             assert_eq!(Difficulty::from_slug(difficulty.slug()), Some(difficulty));
             assert!(!difficulty.label().is_empty());
-            assert_eq!(difficulty.next().next().next(), difficulty);
+            // One full turn of every tier comes back to where it started.
+            let mut turned = difficulty;
+            for _ in 0..Difficulty::ALL.len() {
+                turned = turned.next();
+            }
+            assert_eq!(turned, difficulty);
         }
         assert_eq!(Difficulty::from_slug("impossible"), None);
         assert_eq!(Difficulty::from_slug("Easy"), None);

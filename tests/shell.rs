@@ -592,12 +592,21 @@ fn the_button_has_one_consistent_name() {
             control_names.push(name);
         }
     }
-    for expected in ["Notes", "Undo", "Erase", "Hint", "New puzzle", "Restart"] {
+    for expected in ["Notes", "Undo", "Erase", "Menu", "New puzzle", "Restart"] {
         assert!(
             control_names.iter().any(|name| name == expected),
             "the shell has no control labelled {expected:?}; found {control_names:?}"
         );
     }
+    // A hint is deliberately absent: filling a cell from the answer ends the
+    // deduction the puzzle exists for, and the two destructive buttons it would
+    // sit beside are folded away in the menu for the same reason — they are not
+    // part of playing.
+    assert!(
+        !control_names.iter().any(|name| name == "Hint"),
+        "the hint was removed on purpose; found {control_names:?}"
+    );
+
     // A label must not describe a mechanism. Every one of these is a word the
     // reader acts on rather than a name for how the app is put together.
     for name in &control_names {
@@ -2270,4 +2279,56 @@ fn a_new_version_can_take_over_a_running_app() {
         worker.contains("if (url === MANIFEST) return;"),
         "the worker must leave the manifest to the network"
     );
+}
+
+/// The menu is folded by default, and holds everything that is not playing.
+///
+/// A player mid-puzzle wants four controls. The difficulty of the *next* puzzle,
+/// the marking setting and the two buttons that throw the board away are not
+/// among them, and the destructive pair in particular should not sit under a
+/// thumb that was aiming for Undo.
+#[test]
+fn the_menu_is_folded_and_holds_what_is_not_playing() {
+    let page = shell();
+    let panel = page
+        .split_once("id=\"menu-panel\"")
+        .expect("the shell has a menu panel")
+        .1
+        .split_once("</div>")
+        .expect("the end of the panel")
+        .0;
+
+    assert!(
+        page.contains("id=\"menu-panel\" hidden"),
+        "the menu must start folded"
+    );
+    assert!(
+        page.contains("aria-expanded=\"false\""),
+        "the toggle must say it is closed, once, for a screen reader and the styling"
+    );
+    for inside in [
+        "id=\"difficulty\"",
+        "id=\"marking\"",
+        "id=\"new\"",
+        "id=\"restart\"",
+    ] {
+        assert!(
+            panel.contains(inside),
+            "{inside} belongs in the folded menu, not beside the board"
+        );
+    }
+    // Every difficulty the model knows is offered, in the model's own order.
+    for slug in ["easy", "gentle", "medium", "tricky", "hard", "expert"] {
+        assert!(
+            panel.contains(&format!("value=\"{slug}\"")),
+            "the menu does not offer {slug}"
+        );
+    }
+    // And each marking setting, including the one that flags nothing.
+    for slug in ["off", "rules", "answer"] {
+        assert!(
+            panel.contains(&format!("value=\"{slug}\"")),
+            "the menu does not offer the {slug} marking setting"
+        );
+    }
 }

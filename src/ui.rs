@@ -32,7 +32,7 @@ use web_sys::{
 };
 
 use crate::board::{Difficulty, Digits, CELLS};
-use crate::game::{Game, Report};
+use crate::game::{Game, Marking, Report};
 
 /// The app's whole mutable state, and the element handles it writes through.
 ///
@@ -104,6 +104,11 @@ struct App {
     /// The hidden element holding each cell's spoken name.
     labels: Vec<Element>,
     note_slots: Vec<Vec<Element>>,
+    /// Whether the folded menu is open. The panel is a view concern — nothing
+    /// about the game changes when it opens — so it lives here rather than in
+    /// `Game`, and it is deliberately not remembered between visits: a menu that
+    /// was left open would cover the board on the next launch.
+    menu_open: bool,
     /// The pencil marks last written to each cell, so a render can skip the
     /// ~700 element writes that unchanged marks would otherwise cost.
     shown_notes: [Digits; CELLS],
@@ -184,6 +189,7 @@ impl App {
             digit_slots,
             labels,
             note_slots,
+            menu_open: false,
             shown_notes: [0; CELLS],
         })
     }
@@ -192,7 +198,6 @@ impl App {
     fn paint(&mut self) {
         self.paint_board();
         self.paint_header();
-        self.paint_pad();
         self.paint_controls();
     }
 
@@ -248,47 +253,9 @@ impl App {
         let readout = self.game.readout();
         let document = &self.document;
         set_text(document, "clock", &readout.clock);
-        set_text(document, "mistakes", &readout.mistakes);
-        set_text(document, "remaining", &readout.remaining);
         set_text(document, "stamp", self.game.difficulty().label());
         if self.game.is_won() {
             set_text(document, "solved-detail", &readout.summary);
-        }
-    }
-
-    /// Paint the number pad: each digit's remaining count, and whether it is
-    /// finished.
-    fn paint_pad(&mut self) {
-        let Some(pad) = element(&self.document, "pad") else {
-            return;
-        };
-        let buttons = pad.children();
-        for position in 0..buttons.length() {
-            let Some(button) = buttons
-                .item(position)
-                .and_then(|node| node.dyn_into::<Element>().ok())
-            else {
-                continue;
-            };
-            let Some(digit) = button
-                .get_attribute("data-digit")
-                .and_then(|text| text.parse::<u8>().ok())
-            else {
-                continue;
-            };
-            let remaining = self.game.remaining_of(digit);
-            let complete = remaining == 0;
-            button.set_class_name(if complete { "done" } else { "" });
-            if let Some(count) = button.first_element_child() {
-                let wanted = if complete {
-                    String::new()
-                } else {
-                    remaining.to_string()
-                };
-                if element_text(&count) != wanted {
-                    count.set_text_content(Some(&wanted));
-                }
-            }
         }
     }
 
@@ -309,9 +276,6 @@ impl App {
         if let Some(undo) = button(&document, "undo") {
             undo.set_disabled(!self.game.can_undo());
         }
-        if let Some(hint) = button(&document, "hint") {
-            hint.set_disabled(self.game.is_won());
-        }
         if let Some(erase) = button(&document, "erase") {
             erase.set_disabled(self.game.selected().is_none());
         }
@@ -324,13 +288,17 @@ impl App {
         if let Some(tools) = html_element(&document, "tools") {
             tools.set_hidden(self.game.is_won());
         }
-        if let Some(select) = document
-            .get_element_by_id("difficulty")
-            .and_then(|element| element.dyn_into::<HtmlSelectElement>().ok())
-        {
-            let wanted = self.next.slug();
-            if select.value() != wanted {
-                select.set_value(wanted);
+        for (id, wanted) in [
+            ("difficulty", self.next.slug()),
+            ("marking", self.game.marking().slug()),
+        ] {
+            if let Some(select) = document
+                .get_element_by_id(id)
+                .and_then(|element| element.dyn_into::<HtmlSelectElement>().ok())
+            {
+                if select.value() != wanted {
+                    select.set_value(wanted);
+                }
             }
         }
     }
@@ -369,6 +337,17 @@ impl App {
 
     fn storage(&self) -> Option<Storage> {
         self.window.local_storage().ok().flatten()
+    }
+
+    /// Open or close the folded menu.
+    fn set_menu_open(&mut self, open: bool) {
+        self.menu_open = open;
+        if let Some(panel) = html_element(&self.document, "menu-panel") {
+            panel.set_hidden(!open);
+        }
+        if let Some(toggle) = element(&self.document, "menu") {
+            let _ = toggle.set_attribute("aria-expanded", if open { "true" } else { "false" });
+        }
     }
 
     /// Replace the game and paint it from scratch.
@@ -425,12 +404,10 @@ fn build_pad(document: &Document) -> Result<(), JsValue> {
             .dyn_into::<HtmlButtonElement>()?;
         button.set_attribute("type", "button")?;
         button.set_attribute("data-digit", &digit.to_string())?;
-        // The digit is the button's text and the remaining count is the small
-        // line under it, so the pad reads as "7, four left" to a screen reader
-        // without a second name saying the same thing twice.
+        // The digit and nothing else. It used to carry a count of how many of
+        // that digit were left, which reads as a scoreboard beside a puzzle
+        // rather than a keypad — and it had to be kept right on every move.
         button.set_text_content(Some(&format!("{digit}")));
-        let count = document.create_element("small")?;
-        button.append_child(&count)?;
         pad.append_child(&button)?;
     }
     Ok(())
@@ -515,7 +492,6 @@ fn bind_tools(document: &Document, app: &Shared) {
         ("notes", Tool::Notes),
         ("undo", Tool::Undo),
         ("erase", Tool::Erase),
-        ("hint", Tool::Hint),
     ] {
         let Some(button) = button(document, id) else {
             warn("the shell is missing a control", &JsValue::from_str(id));
@@ -528,7 +504,6 @@ fn bind_tools(document: &Document, app: &Shared) {
                 Tool::Notes => app.game.toggle_notes(),
                 Tool::Undo => app.game.undo(),
                 Tool::Erase => app.game.erase(),
-                Tool::Hint => app.game.hint(),
             };
             app.apply(report);
             // Notes is a mode, not a move: it must not move the keyboard away
@@ -562,6 +537,19 @@ fn bind_menu(document: &Document, app: &Shared) {
         closure.forget();
     }
 
+    // The menu itself: one button that opens and closes the panel, saying which
+    // state it is in so a screen reader and the styling agree.
+    if let Some(toggle) = button(document, "menu") {
+        let shared = Rc::clone(app);
+        let closure = Closure::<dyn FnMut()>::new(move || {
+            let mut app = shared.borrow_mut();
+            let open = app.menu_open;
+            app.set_menu_open(!open);
+        });
+        listen(&toggle, "click", closure.as_ref().unchecked_ref());
+        closure.forget();
+    }
+
     if let Some(restart) = button(document, "restart") {
         let shared = Rc::clone(app);
         let closure = Closure::<dyn FnMut()>::new(move || {
@@ -573,6 +561,27 @@ fn bind_menu(document: &Document, app: &Shared) {
             app.apply(report);
         });
         listen(&restart, "click", closure.as_ref().unchecked_ref());
+        closure.forget();
+    }
+
+    if let Some(select) = document
+        .get_element_by_id("marking")
+        .and_then(|element| element.dyn_into::<HtmlSelectElement>().ok())
+    {
+        let shared = Rc::clone(app);
+        let closure = Closure::<dyn FnMut(Event)>::new(move |_| {
+            let mut app = shared.borrow_mut();
+            if let Some(select) = app
+                .document
+                .get_element_by_id("marking")
+                .and_then(|element| element.dyn_into::<HtmlSelectElement>().ok())
+            {
+                let marking = Marking::from_slug(&select.value()).unwrap_or(Marking::Rules);
+                let report = app.game.set_marking(marking);
+                app.apply(report);
+            }
+        });
+        listen(&select, "change", closure.as_ref().unchecked_ref());
         closure.forget();
     }
 
@@ -602,8 +611,8 @@ fn bind_menu(document: &Document, app: &Shared) {
 
 /// The keys a physical keyboard adds, because a phone is not the only way in.
 ///
-/// Digits and the arrow keys are what the grid implies; `n`, `u` and `h` are
-/// the three tools whose names a reader can remember.
+/// Digits and the arrow keys are what the grid implies; `n` and `u` are the two
+/// tools whose names a reader can remember.
 fn bind_keyboard(window: &Window, app: &Shared) {
     let shared = Rc::clone(app);
     let closure = Closure::<dyn FnMut(KeyboardEvent)>::new(move |event: KeyboardEvent| {
@@ -638,11 +647,6 @@ fn bind_keyboard(window: &Window, app: &Shared) {
                 }
                 "u" | "U" => {
                     let report = app.game.undo();
-                    app.apply(report);
-                    true
-                }
-                "h" | "H" => {
-                    let report = app.game.hint();
                     app.apply(report);
                     true
                 }
@@ -966,7 +970,6 @@ enum Tool {
     Notes,
     Undo,
     Erase,
-    Hint,
 }
 
 /// The text of an element, or `""`.
