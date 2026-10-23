@@ -11,12 +11,12 @@
        mask, for the launcher's own padding, and for the icon to look deliberate
        rather than clipped.
 
-       One colour, on a transparent ground, at the measured midpoint between a
-       light and a dark surface: a single static icon cannot clear 4.5:1 on both
-       (#7a7a7a is 4.29:1 on white and 4.40:1 on the app's own dark ground), and
-       3:1 is the bar for a graphical object. Every install icon is rasterized
+       One colour, `#606060`, on a transparent ground — the whole family's icon
+       colour. A static icon is drawn on surfaces it cannot know, so the bar is
+       the 3:1 for a graphical object rather than the 4.5:1 for text: `#606060`
+       reaches 5.82:1 on the light surface and 3.00:1 on the dark one. Every install icon is rasterized
        from this file at build time; this is the source of truth, never a PNG. -->
-  <g fill="none" stroke="#7a7a7a" stroke-linecap="round">
+  <g fill="none" stroke="#606060" stroke-linecap="round">
     <!-- The outer grid: 320 wide, centred in 512, so 96 to 416. -->
     <rect x="96" y="96" width="320" height="320" rx="26" stroke-width="24"/>
     <!-- The 3×3 box rules, at a third and two thirds of the way across. -->
@@ -25,7 +25,7 @@
   <!-- Four placed cells: a puzzle part-way through, which is what a sudoku in
        progress looks like at a glance, and the only thing that distinguishes it
        from a spreadsheet at launcher size. -->
-  <g fill="#7a7a7a">
+  <g fill="#606060">
     <rect x="118" y="118" width="60" height="60" rx="10"/>
     <rect x="334" y="118" width="60" height="60" rx="10"/>
     <rect x="118" y="334" width="60" height="60" rx="10"/>
