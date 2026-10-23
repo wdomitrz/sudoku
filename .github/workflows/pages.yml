@@ -215,10 +215,9 @@ jobs:
           # rather than trusting a green job to mean the site is whole.
           #
           # A green build that produced seven of these eight files is exactly the
-          # failure this shape has already had: `write_tree` once swapped the
-          # whole directory and took the wasm with it, leaving a
-          # publishable-looking site with no app in it. Verify the file list, not
-          # the exit status.
+          # failure this shape has already had: a wholesale directory swap once
+          # took the wasm with it, leaving a publishable-looking site with no app
+          # in it. Verify the file list, not the exit status.
           #
           # The Python below is a `<<'PY'` heredoc, not `python3 -c`, and it must
           # stay one. An indented `python3 -c "..."` body is quoted by the shell
@@ -227,6 +226,11 @@ jobs:
           # nothing that looks wrong. Three sibling workflows had exactly that.
           # The quoted delimiter also stops the shell expanding `$` inside the
           # body.
+          #
+          # This step is identical in `build.yml` and `pages.yml`, and a test
+          # asserts that: one runs on pull requests, the other before publishing,
+          # and a check that differs between them lets a pull request pass a site
+          # the deploy rejects.
           expected="app.js app_bg.wasm icon.svg icon-192.png icon-512.png index.html manifest.webmanifest service-worker.js style.css"
           missing=""
           for file in $expected; do
@@ -281,13 +285,10 @@ jobs:
           # page links it and the worker precaches it, so a drift here is both
           # a wrong favicon and an install that fails.
           #
-          # The digest is the author's original, and it is deliberately changed
-          # when the icon is: on 2026-10-01 the `P` glyph gave way to three bars
-          # in a mid grey. It must equal ICON_SHA256 in tests/shell.rs -- the
-          # same value in two places, asserted equal by
-          # `both_workflows_pin_the_icon_the_repository_still_has`. When you
-          # change the icon, change it in this workflow, in that workflow, and in
-          # that constant, or one of the two goes red and says so.
+          # The digest is pinned so a redraw cannot pass unnoticed. It must equal
+          # the constant in tests/shell.rs -- the same value in two places, and
+          # both workflows -- so change it in all of them together, or the check
+          # that disagrees with the others goes red and says so.
           with open("assets/icon.svg", "rb") as handle:
               source = handle.read()
           with open("dist/icon.svg", "rb") as handle:
@@ -295,7 +296,7 @@ jobs:
           assert published == source, "dist/icon.svg is not the committed icon"
           assert hashlib.sha256(source).hexdigest() == (
               "b5e7ffc186bfd2a880149c7bd93165034db936bf25bea123312a678dc0a36907"
-          ), "assets/icon.svg is no longer the author's original"
+          ), "assets/icon.svg is no longer the recorded icon"
           print("  ok   dist/icon.svg is the committed icon")
 
           # The manifest's icon list must be what was actually rasterized, not a
@@ -308,11 +309,17 @@ jobs:
                "type": "image/png", "purpose": "any maskable"}
               for size in (192, 512)
           ], manifest["icons"]
-          for key in ("id", "start_url", "scope"):
+          for key in ("start_url", "scope"):
               assert manifest[key] == "./", f"{key} must be relative"
+          # No `id`, asserted rather than left out: a relative id resolves to
+          # the bare origin, so every app installed from this repository would
+          # share one identity and collide. This is the rule the whole family
+          # follows, and it is checked in both workflows on purpose.
+          assert "id" not in manifest, (
+              "an id of \"./\" resolves to the bare origin and collides with every sibling app"
+          )
           print("  ok   manifest agrees with the rasterized icons and mounts anywhere")
           PY
-
       - name: Run the tests
         run: cargo test --locked
 
