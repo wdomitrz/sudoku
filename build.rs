@@ -211,11 +211,16 @@ fn icon_entry(name: &str, size: u32) -> serde_json::Value {
 /// The manifest, assembled from the declared identity and the icons that were
 /// actually rasterized.
 ///
-/// `id`, `start_url` and `scope` are all `"./"`, so one build works from any
-/// subdirectory and installs under the path it is served from.
+/// `start_url` and `scope` are `"./"`, so one build works from any subdirectory
+/// and installs under the path it is served from.
+///
+/// There is deliberately no `id`. A relative `id` resolves to the bare origin
+/// rather than the app's directory, so every app installed from this repository
+/// would share one identity and a second install would collide with the first —
+/// which presents as "the wrong app installed", never as a build error. Both
+/// workflows assert its absence.
 fn manifest(icons: &[serde_json::Value]) -> String {
     serde_json::json!({
-        "id": "./",
         "name": MANIFEST.name,
         "short_name": MANIFEST.short_name,
         "start_url": "./",
