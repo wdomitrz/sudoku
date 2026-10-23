@@ -261,46 +261,25 @@ impl Report {
     #[must_use]
     pub fn words(&self) -> String {
         match *self {
-            Self::Idle => String::new(),
-            Self::Selected { index } => format!(
-                "Row {}, column {}.",
-                row_of(index) + 1,
-                column_of(index) + 1
-            ),
-            Self::Placed {
-                index,
-                digit,
-                correct,
-                completed_digit,
-            } => {
-                let place = format!(
-                    "{digit} in row {}, column {}.",
-                    row_of(index) + 1,
-                    column_of(index) + 1
-                );
-                if !correct {
-                    format!("{place} That is not the digit for this cell.")
-                } else if completed_digit {
-                    format!("{place} That is the last {digit}.")
+            // A selection changes nothing the reader cannot see, so it says
+            // nothing. The cell's name carries its position for anyone who
+            // needs it to navigate.
+            Self::Idle | Self::Selected { .. } => String::new(),
+            Self::Placed { digit, correct, .. } => {
+                if correct {
+                    String::new()
                 } else {
-                    place
+                    format!("{digit} is not the digit for that cell.")
                 }
             }
-            Self::Noted { index, digit, on } => {
-                let cell = format!("row {}, column {}", row_of(index) + 1, column_of(index) + 1);
+            Self::Noted { digit, on, .. } => {
                 if on {
-                    format!("Noted {digit} in {cell}.")
+                    format!("Noted {digit}.")
                 } else {
-                    format!("Removed the note {digit} from {cell}.")
+                    format!("Removed the note {digit}.")
                 }
             }
-            Self::Erased { index } => {
-                format!(
-                    "Cleared row {}, column {}.",
-                    row_of(index) + 1,
-                    column_of(index) + 1
-                )
-            }
+            Self::Erased { .. } => "Cleared.".to_string(),
             Self::Undone => "Last move undone.".to_string(),
             Self::Restarted => "Puzzle restarted.".to_string(),
             Self::MarkingChanged { marking } => format!("{}.", marking.sentence()),
@@ -1269,20 +1248,35 @@ mod tests {
     #[test]
     fn reports_say_what_happened_without_naming_how_the_app_is_built() {
         let index = 10;
-        let words = Report::Placed {
+        // A correct digit is silent: the reader can see the cell fill, and a
+        // sentence per keystroke is noise on the one line that could be useful.
+        assert_eq!(
+            Report::Placed {
+                index,
+                digit: 4,
+                correct: true,
+                completed_digit: false,
+            }
+            .words(),
+            ""
+        );
+        // A selection is silent for the same reason.
+        assert_eq!(Report::Selected { index }.words(), "");
+        // A wrong digit says so, without a coordinate.
+        let wrong = Report::Placed {
             index,
             digit: 4,
-            correct: true,
+            correct: false,
             completed_digit: false,
         }
         .words();
-        assert_eq!(words, "4 in row 2, column 2.");
-        assert!(words.to_lowercase().contains("row"));
+        assert_eq!(wrong, "4 is not the digit for that cell.");
+        assert!(!wrong.to_lowercase().contains("row"));
+
         for report in [
             Report::Undone,
             Report::Restarted,
             Report::Won,
-            Report::Selected { index },
             Report::Erased { index },
             Report::Noted {
                 index,
@@ -1297,6 +1291,12 @@ mod tests {
         ] {
             let words = report.words().to_lowercase();
             assert!(!words.is_empty(), "{report:?} has nothing to say");
+            // No coordinates anywhere: "row 4, column 7" is a fact about the
+            // grid's indexing, not about what the reader did.
+            assert!(
+                !words.contains("row") && !words.contains("column"),
+                "{report:?} reports a coordinate: {words}"
+            );
             for forbidden in ["rust", "wasm", "webassembly", "javascript", "bindgen"] {
                 assert!(
                     !words.contains(forbidden),
@@ -1304,6 +1304,5 @@ mod tests {
                 );
             }
         }
-        assert_eq!(Report::Idle.words(), "");
     }
 }

@@ -244,7 +244,7 @@ h1 {
 
 #pad button { font-size: 1.15rem; font-weight: 600; }
 #pad button:active, #tools button:active { filter: brightness(.92); }
-#tools #menu:active { filter: brightness(.92); }
+.menu-button:active { filter: brightness(.92); }
 
 #tools {
   width: var(--board);
@@ -261,22 +261,73 @@ h1 {
 }
 #tools button:disabled { opacity: .45; }
 
-/* The folded menu: everything that is not playing, opened on request. Two
-   columns, label above control, so a long option name cannot squeeze a select
-   into a stub. */
+/* The folded menu, as a sheet over the board.
+   A panel laid out under the tools pushed the page down when it opened: at a
+   phone's height it did not fit, so opening it scrolled the window and the
+   button the reader had just tapped slid out from under their thumb. This
+   changes no layout at all, and a scrim closes it — by being a label for the
+   same checkbox, so no listener is involved. */
 #menu-panel {
-  width: var(--board);
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+}
+
+.menu-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgb(0 0 0 / 45%);
+}
+
+.menu-sheet {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: min(100%, 30rem);
+  margin: 0 auto;
   display: grid;
   grid-template-columns: 1fr 1fr;
   align-items: center;
   gap: .4rem .5rem;
-  padding: .65rem;
+  padding: .55rem .75rem calc(1.1rem + env(safe-area-inset-bottom));
   background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: .5rem;
+  border-top: 1px solid var(--line-strong);
+  border-radius: .8rem .8rem 0 0;
+  box-shadow: 0 -6px 24px rgb(0 0 0 / 35%);
+  max-height: 80vh;
+  overflow-y: auto;
 }
 
-#menu-panel label {
+.menu-head {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: .1rem;
+  color: var(--muted);
+  font-size: .72rem;
+  font-weight: 600;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+}
+
+.menu-done {
+  all: unset;
+  cursor: pointer;
+  padding: .35rem .8rem;
+  border-radius: .4rem;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: .78rem;
+  font-weight: 700;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.menu-done:active { filter: brightness(.92); }
+
+.menu-sheet label {
   grid-column: span 1;
   color: var(--muted);
   font-size: .72rem;
@@ -285,7 +336,7 @@ h1 {
   text-transform: uppercase;
 }
 
-#menu-panel select {
+.menu-sheet select {
   grid-column: span 1;
   min-height: 44px;
   width: 100%;
@@ -308,7 +359,7 @@ h1 {
   background-repeat: no-repeat;
 }
 
-#menu-panel .menu-actions {
+.menu-sheet .menu-actions {
   grid-column: 1 / -1;
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -316,7 +367,7 @@ h1 {
   margin-top: .15rem;
 }
 
-#menu-panel .menu-actions button {
+.menu-sheet .menu-actions button {
   all: unset;
   display: flex;
   align-items: center;
@@ -332,15 +383,40 @@ h1 {
   font-weight: 600;
 }
 
-#menu-panel .menu-actions button:active { filter: brightness(.92); }
+.menu-sheet .menu-actions button:active { filter: brightness(.92); }
 
 /* The menu button is a control that opens a control, so it shows its state. */
-#tools #menu[aria-expanded="true"] {
+/* The menu is a checkbox with a label that looks like a button. The input is
+   visually hidden, so the pressed state is expressed on the label beside it and
+   the focus ring is drawn on the label when the input has focus. */
+.menu-button {
+  all: unset;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  cursor: pointer;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: .45rem;
+  color: var(--fg);
+  font-size: .82rem;
+  font-weight: 600;
+}
+
+.menu-toggle:checked + .menu-button {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-ink);
 }
 
+.menu-toggle:focus-visible + .menu-button {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The panel scrolls into view when it opens; it is the one part of the page
+   that can be taller than what is left below the tools. */
 
 /* The solved panel takes the pad's place rather than covering the board: the
    finished grid is the thing worth looking at. */

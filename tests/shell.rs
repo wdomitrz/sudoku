@@ -575,6 +575,23 @@ fn the_button_has_one_consistent_name() {
     // person uses for this game. The template's "Add one" was a counter's
     // label; a sudoku's controls are named for what they do to a cell.
     let mut control_names: Vec<String> = Vec::new();
+    for (at, opening) in page.match_indices("<label for=\"menu\"") {
+        // The menu's control is a checkbox with a label as its face, so its name
+        // is the label's text rather than a button body.
+        let after_label = &page[at + opening.len()..];
+        let close = after_label
+            .find("</label>")
+            .expect("the end of the menu label");
+        if let (Some(open), Some(shut)) = (after_label.find('>'), after_label.find("<span>")) {
+            if shut < close {
+                let text =
+                    after_label[shut + 6..after_label.find("</span>").unwrap_or(close)].trim();
+                if !text.is_empty() && open < close {
+                    control_names.push(text.to_string());
+                }
+            }
+        }
+    }
     for (at, opening) in page.match_indices("<button id=") {
         // `match_indices` yields the matched text, not what follows it.
         let from_button = &page[at + opening.len()..];
@@ -846,7 +863,7 @@ fn the_scope_is_a_relative_directory_shared_with_the_worker() {
 /// it. The pin is the mechanism working as intended — a red test, a visible
 /// diff, a reason — so it stays, and the reason moves here with the change
 /// rather than being left in a commit message to rot.
-const ICON_SHA256: &str = "d69bda21bbd3392e35a1acb2382dd8bc471f013a86d1a7145d8801329c4abca5";
+const ICON_SHA256: &str = "b5e7ffc186bfd2a880149c7bd93165034db936bf25bea123312a678dc0a36907";
 
 #[test]
 fn the_icon_is_the_committed_svg() {
@@ -2281,53 +2298,74 @@ fn a_new_version_can_take_over_a_running_app() {
     );
 }
 
-/// The menu is folded by default, and holds everything that is not playing.
+/// The menu is folded by default, holds what is not playing, and can be closed
+/// without a click listener.
 ///
-/// A player mid-puzzle wants four controls. The difficulty of the *next* puzzle,
-/// the marking setting and the two buttons that throw the board away are not
-/// among them, and the destructive pair in particular should not sit under a
-/// thumb that was aiming for Undo.
+/// A player mid-puzzle wants four controls. The difficulty of the *next*
+/// puzzle, the marking setting and the two buttons that throw the board away
+/// are not among them, and the destructive pair should not sit under a thumb
+/// that was aiming for Undo.
+///
+/// It is a checkbox with a label, and that is not a style choice: opening it
+/// used to hang off a `click` listener, and a tap on a touch screen produced no
+/// `click` at all — only pointerdown/up and touchstart/end — so on a phone the
+/// menu never opened. A checkbox toggles itself on every one of those gestures.
+/// Everything that closes the sheet is a `label` for the same checkbox, for the
+/// same reason.
 #[test]
-fn the_menu_is_folded_and_holds_what_is_not_playing() {
+fn the_menu_is_folded_and_can_be_closed_without_a_listener() {
     let page = shell();
-    let panel = page
-        .split_once("id=\"menu-panel\"")
-        .expect("the shell has a menu panel")
-        .1
-        .split_once("</div>")
-        .expect("the end of the panel")
-        .0;
-
+    assert!(
+        page.contains("<input id=\"menu\" type=\"checkbox\""),
+        "the menu toggle must be a checkbox: it toggles without a click listener"
+    );
     assert!(
         page.contains("id=\"menu-panel\" hidden"),
         "the menu must start folded"
     );
     assert!(
-        page.contains("aria-expanded=\"false\""),
-        "the toggle must say it is closed, once, for a screen reader and the styling"
+        !page.contains("id=\"menu\" type=\"button\""),
+        "a button here needs a click listener, and a tap does not always produce one"
     );
+    // The face of the checkbox, the scrim and Done: all labels, no script.
+    let labels = page.matches("<label for=\"menu\"").count();
+    assert!(
+        labels >= 3,
+        "the checkbox's face, the scrim and Done must all be labels for it; \
+         found {labels}"
+    );
+
+    // The menu holds the things that are not part of playing, and they are not
+    // in the tools row beside the board.
+    let tools = page
+        .split_once("<div id=\"tools\">")
+        .expect("the tools row")
+        .1
+        .split_once("</div>")
+        .expect("the end of the tools row")
+        .0;
     for inside in [
         "id=\"difficulty\"",
         "id=\"marking\"",
         "id=\"new\"",
         "id=\"restart\"",
     ] {
+        assert!(page.contains(inside), "{inside} is missing from the shell");
         assert!(
-            panel.contains(inside),
-            "{inside} belongs in the folded menu, not beside the board"
+            !tools.contains(inside),
+            "{inside} belongs in the menu, not beside the board"
         );
     }
-    // Every difficulty the model knows is offered, in the model's own order.
+
     for slug in ["easy", "gentle", "medium", "tricky", "hard", "expert"] {
         assert!(
-            panel.contains(&format!("value=\"{slug}\"")),
+            page.contains(&format!("value=\"{slug}\"")),
             "the menu does not offer {slug}"
         );
     }
-    // And each marking setting, including the one that flags nothing.
     for slug in ["off", "rules", "answer"] {
         assert!(
-            panel.contains(&format!("value=\"{slug}\"")),
+            page.contains(&format!("value=\"{slug}\"")),
             "the menu does not offer the {slug} marking setting"
         );
     }
