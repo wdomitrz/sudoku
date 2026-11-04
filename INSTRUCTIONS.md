@@ -41,7 +41,7 @@ Prettier, no `npx`, no `node`, no bundler, no framework, no runtime install.
 - Capture owned `Rc` clones in an event closure, never borrowed handles, and `forget()` the closure so the listener cannot dangle.
 - Name constants and functions. Do not hide important behaviour in clever one-liners.
 - Keep `web-sys` features to the subset used; add `Navigator` before calling `window.navigator()`.
-- Pin `wasm-bindgen = "=0.2.128"` exactly and check the CLI reports the same; a mismatch fails at load time, not at compile time.
+- Ask for `wasm-bindgen = "0.2"` and let `Cargo.lock` decide the version; install the CLI at that version. A mismatch fails at load time, not at compile time.
 - Add a runtime dependency only when the need is explicit. Do not add one for simple state, formatting, storage or dates.
 
 ## Files and icons

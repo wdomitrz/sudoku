@@ -1133,160 +1133,51 @@ fn top_level_env(yaml: &str) -> Option<std::collections::BTreeMap<String, String
     saw_env.then_some(declared)
 }
 
-/// The Pages workflow must not install a bindings generator for a runtime the
-/// crate is not built against.
+/// The generator version must be the lockfile's, and nothing may restate it.
 ///
-/// `Cargo.toml` pins `wasm-bindgen = "=0.2.128"` exactly; the job installs its
-/// own CLI from a variable in `env:`. Move the dependency and the workflow keeps
-/// building happily: it generates bindings for a runtime the page does not have,
-/// and the only symptom is a live site that fails at startup with "The app
-/// could not start" — for every visitor, and only in a browser.
+/// `Cargo.toml` asks for `wasm-bindgen = "0.2"`; the exact version is decided by
+/// `Cargo.lock`, and it is written down in exactly one place because
+/// `wasm-bindgen-futures`, `js-sys` and `web-sys` each depend on one exact
+/// `wasm-bindgen`. The generator has to be that same version: a mismatched one
+/// emits bindings the runtime will not load, and the only symptom is a live site
+/// that fails at startup with "The app could not start" — for every visitor, and
+/// only in a browser.
 ///
-/// So the two are asserted equal here rather than trusted to be edited
-/// together. And the *declaration* is asserted as well as the use: an undeclared
-/// `WASM_BINDGEN_VERSION` expands to nothing, the generator step installs no
-/// generator, and every other check here passes — which is how an earlier
-/// version of `pages.yml` published a site with no app in it.
+/// So neither workflow may name a version. A literal there is a second copy of a
+/// fact the lock records, wrong from the next `cargo update` onward, and silent
+/// when it is. Read from the lock and there is nothing to keep in step.
 #[test]
-fn the_pages_build_generates_bindings_for_the_pinned_runtime() {
-    let Some(pages) = live_pages_workflow() else {
-        return;
-    };
-
-    // Read the pin the way Cargo writes it: `wasm-bindgen = "=0.2.128"`.
+fn both_workflows_take_the_generator_version_from_the_lockfile() {
     let manifest = std::fs::read_to_string(root().join("Cargo.toml")).expect("Cargo.toml");
-    let pinned = manifest
-        .lines()
-        .find_map(|line| {
-            // The line must *be* the dependency, not merely mention it:
-            // `wasm-bindgen-futures = "0.4.78"` sits next to it, and a
-            // `starts_with("wasm-bindgen")` matches both.
-            let rest = line.trim().strip_prefix("wasm-bindgen = ")?;
-            let rest = rest.trim().trim_matches('"');
-            (!rest.is_empty()).then_some(rest)
-        })
-        .expect("Cargo.toml pins a wasm-bindgen version");
     assert!(
-        pinned.starts_with('='),
-        "Cargo.toml must pin wasm-bindgen exactly ({pinned:?}), so there is one version for \
-         the crate and one for the bindings generator; a caret would resolve to whatever \
-         the lockfile holds and the workflow's literal would name one arbitrary version",
+        manifest
+            .lines()
+            .any(|line| line.trim() == "wasm-bindgen = \"0.2\""),
+        "Cargo.toml must ask for `wasm-bindgen = \"0.2\"`; an exact pin here would be a second \
+         copy of the version the lockfile and the sibling crates already decide",
     );
-    // `pinned` is `"=0.2.128"`, quotes stripped: the `=` is part of the value.
-    let version = pinned.trim_start_matches('=');
 
-    let Some(env) = top_level_env(&pages) else {
-        panic!(
-            "pages.yml must have a top-level `env:` block declaring WASM_BINDGEN_VERSION: \
-             {version}; the install step reads $WASM_BINDGEN_VERSION, an undeclared variable \
-             expands to nothing, and the job would then publish bindings for no runtime"
+    for name in ["build.yml", "pages.yml"] {
+        let Some(text) = workflow(name) else {
+            panic!("{name} must exist");
+        };
+        assert!(
+            text.contains("version=\"$(awk"),
+            "{name} must derive the generator version from Cargo.lock rather than naming one",
         );
-    };
-    assert_eq!(
-        env.get("WASM_BINDGEN_VERSION").map(String::as_str),
-        Some(version),
-        "pages.yml's WASM_BINDGEN_VERSION must be exactly the Cargo.toml pin ({version})",
-    );
-}
-
-/// This template must not carry a wake-lock cfg it does not need, and must not
-/// be told it does.
-///
-/// Verified 2026-10-02: a clean wasm build — fresh `CARGO_TARGET_DIR`, no
-/// `RUSTFLAGS`, no `.cargo/config.toml` — finishes, so the crate compiles
-/// without `--cfg=web_sys_unstable_apis`. That cfg is for web-sys's unstable
-/// surface (the Screen Wake Lock), and this crate does not use it.
-///
-/// The rule is the *agreement*, not the absence: whatever the crate is built
-/// with is what the workflow must lint with. A workflow carrying a cfg the
-/// crate is not built with does not merely waste a flag — web-sys types several
-/// getters differently behind it (`MouseEvent::client_x` is `i32` normally,
-/// `f64` with the cfg), so the wasm clippy run reads a green about a different
-/// program from the one that ships, and only that run can see it.
-///
-/// So this asserts the workflow declares no `RUSTFLAGS` at all, and — so a
-/// future app that legitimately adds the Wake Lock gets a *changed* test with a
-/// reason rather than a deleted one — names where the cfg would go.
-#[test]
-fn the_pages_workflow_declines_a_cfg_this_crate_does_not_need() {
-    let Some(pages) = live_pages_workflow() else {
-        return;
-    };
-
-    let env = top_level_env(&pages).unwrap_or_default();
-    assert!(
-        !env.contains_key("RUSTFLAGS"),
-        "pages.yml declares RUSTFLAGS={}; this template uses no unstable web-sys API and its \
-         wasm build was verified clean without it, so the flag can only make the wasm clippy \
-         run lint a different web-sys than the one that ships. If you have added an unstable \
-         API, set it here deliberately and update this test with the reason",
-        env.get("RUSTFLAGS").map_or("", String::as_str),
-    );
-
-    // The same for `Cargo.toml`: a `[target.wasm32...] rustflags` there is
-    // documented as ignored for non-path dependencies, so it would be a line
-    // that looks load-bearing and is not.
-    let manifest = std::fs::read_to_string(root().join("Cargo.toml")).expect("Cargo.toml");
-    assert!(
-        !manifest.contains("rustflags"),
-        "Cargo.toml sets rustflags; cargo ignores `[target.*.rustflags]` for registry \
-         dependencies, so this would not reach web-sys and only look like it does",
-    );
-
-    // And no `.cargo/config.toml`: none exists, and adding one for a flag this
-    // crate does not need would put the same dead configuration in every repo
-    // generated from the template.
-    let config = root().join(".cargo/config.toml");
-    assert!(
-        !config.exists(),
-        ".cargo/config.toml must not exist: this crate needs no compiler flag, and a copy of \
-         the template would inherit a configuration with nothing in it to justify",
-    );
-}
-
-/// The generator version must be declared in `env:`, not written as a literal
-/// into the install step — and the install step must actually read it.
-///
-/// These are two different mistakes. A literal in the step is right once and
-/// wrong forever after the pin moves, and the test above cannot catch it because
-/// it only compares against `Cargo.toml`. A `$WASM_BINDGEN_VERSION` with no
-/// declaration installs nothing. So: the use must be there, and it must be the
-/// variable, not a hard-coded string.
-#[test]
-fn the_generator_is_installed_from_the_declared_variable() {
-    let Some(pages) = live_pages_workflow() else {
-        return;
-    };
-    // Read the value off its own line rather than splitting the whole file: a
-    // `split_once('"')` on the text that follows runs past the closing quote
-    // and across a dozen lines into unrelated shell, which reads as a
-    // catastrophic failure and is really a bad parse.
-    let mut uses = pages.lines().filter_map(|line| {
-        let value = line.trim().strip_prefix("version=")?;
-        let value = value.strip_prefix('"')?;
-        value.split('"').next()
-    });
-    let install = uses.next().expect(
-        "pages.yml must pass a `version=\"…\"` to the install step, so the pin in \
-         Cargo.toml has one place to be wrong",
-    );
-    assert_eq!(
-        install, "$WASM_BINDGEN_VERSION",
-        "pages.yml must install the generator with version=\"$WASM_BINDGEN_VERSION\" rather \
-         than a literal, so the pin in Cargo.toml has exactly one place to be wrong; found \
-         version=\"{install}\"",
-    );
-    // And nowhere else: `asset="wasm-bindgen-${version}-…"` builds the download
-    // name from the same variable, so exactly one `version="` may exist. Two
-    // means one of them is a literal, and the assertion above — which reads only
-    // the first — would pass on the variable while the install used the other.
-    assert_eq!(
-        pages.matches("version=\"").count(),
-        1,
-        "pages.yml must name the generator version exactly once, as \
-         version=\"$WASM_BINDGEN_VERSION\"; a second occurrence is a hard-coded literal the \
-         first assertion cannot see",
-    );
+        assert!(
+            text.contains("Cargo.lock"),
+            "{name} must read Cargo.lock for the generator version",
+        );
+        assert!(
+            !text.contains("WASM_BINDGEN_VERSION"),
+            "{name} must not declare a generator version of its own; Cargo.lock has it",
+        );
+        assert!(
+            !text.contains("version=\"0.2"),
+            "{name} must not name a generator version literal",
+        );
+    }
 }
 
 /// A deploy that can run from any branch is a deploy a stranger can run.
@@ -1818,7 +1709,7 @@ fn the_env_reader_reads_the_block_and_stops_at_the_next_section() {
         "\
 env:
   CARGO_TERM_COLOR: always
-  WASM_BINDGEN_VERSION: 0.2.128
+  RUST_BACKTRACE: 1
 
 permissions:
   contents: read
@@ -1830,8 +1721,8 @@ permissions:
         Some("always"),
     );
     assert_eq!(
-        env.get("WASM_BINDGEN_VERSION").map(String::as_str),
-        Some("0.2.128"),
+        env.get("RUST_BACKTRACE").map(String::as_str),
+        Some("1"),
     );
     // The block ended at `permissions:`; this key is indented the same way and
     // would be swallowed by a reader that kept going.

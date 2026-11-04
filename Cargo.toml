@@ -21,15 +21,18 @@ tiny-skia = "0.12"
 serde_json = "1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-# `=0.2.128` is an exact pin, not a caret: the generated bindings and this
-# crate's runtime must come from the same version, and the CLI must match both.
-# A mismatch fails at load time in the browser, not at compile time.
-wasm-bindgen = "=0.2.128"
-wasm-bindgen-futures = "0.4.78"
-js-sys = "0.3.105"
+# A caret, not an exact pin: `wasm-bindgen-futures`, `js-sys` and `web-sys`
+# each depend on one exact `wasm-bindgen`, so `Cargo.lock` decides the version
+# whichever way this line is written, and an exact pin here would only be a
+# second copy of it to keep in step. The bindings generator must be that same
+# version -- a mismatch fails at load time in the browser, not at compile time
+# -- and the workflows read the version from the lock rather than naming it.
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
 # The subset this app actually uses. Do not paste a superset: every feature
 # pulls generated bindings you do not need into the wasm.
-web-sys = { version = "0.3.105", features = [
+web-sys = { version = "0.3", features = [
   "Window", "Document", "Element", "HtmlElement", "HtmlButtonElement",
   "HtmlInputElement", "HtmlSelectElement", "HtmlCollection", "Node", "Event", "EventTarget", "KeyboardEvent",
   "Navigator", "Storage", "StorageManager", "Performance",

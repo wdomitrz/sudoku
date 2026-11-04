@@ -49,18 +49,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # Must match the `wasm-bindgen = "=0.2.128"` pin in Cargo.toml, exactly. A
-  # mismatched generator emits bindings the runtime will not load, and the page
-  # fails to start with "The app could not start" -- a failure that looks like an
-  # app bug and is not one.
-  #
-  # `version="$WASM_BINDGEN_VERSION"` below expands to nothing if this line is
-  # missing, and every other check then passes with no generator installed at
-  # all. That is why a test asserts the declaration, not just the use.
-  WASM_BINDGEN_VERSION: 0.2.128
   # NO RUSTFLAGS HERE, DELIBERATELY. `web_sys_unstable_apis` is for apps that
   # use web-sys's unstable surface -- the Screen Wake Lock API, say, which is
-  # gated on it in web-sys 0.3.105 and whose `WakeLockSentinel` type is not
+  # gated on it in web-sys 0.3 and whose `WakeLockSentinel` type is not
   # reachable without it even with the cargo features enabled. This template
   # uses no unstable API, and a clean wasm build with no `RUSTFLAGS` and no
   # `.cargo/config.toml` was verified to finish here (2026-10-02).
@@ -113,10 +104,10 @@ jobs:
       - name: Install the pinned wasm-bindgen generator
         run: |
           set -euuo pipefail
-          # The official prebuilt binary, not `cargo install`. The CLI is pinned
-          # to one exact version, and `cargo install` would compile it from
-          # source -- minutes, and a second toolchain's worth of failure
-          # surface. The release publishes a musl static binary plus a
+          # The official prebuilt binary, not `cargo install`. The CLI has to be
+          # the one exact version Cargo.lock records, and `cargo install` would
+          # compile it from source -- minutes, and a second toolchain's worth of
+          # failure surface. The release publishes a musl static binary plus a
           # `.sha256sum` per platform, so verify against that file and fail
           # loudly rather than generating bindings from an unverified download.
           #
@@ -126,11 +117,22 @@ jobs:
           # download, the second catches a legitimately re-uploaded release --
           # which is the one an attacker would want, since only they can
           # re-upload it.
-          version="$WASM_BINDGEN_VERSION"
+          # The generator version is the one this crate is actually built
+          # against: read it from Cargo.lock instead of keeping a second copy
+          # here. Two copies drift, and the drift is silent -- a generator from
+          # another version emits bindings the runtime will not load, and the
+          # only symptom is a live site that fails to start with "The app could
+          # not start". Reading the lock also means a moved version cannot go on
+          # using the previous version's digest below unnoticed.
+          version="$(awk '/^name = "wasm-bindgen"$/{found=1; next} \
+                          found && /^version = "/{gsub(/"/,"",$3); print $3; exit}' \
+                     Cargo.lock)"
+          test -n "$version" \
+            || { echo "::error::Cargo.lock records no wasm-bindgen version"; exit 1; }
           target=x86_64-unknown-linux-musl
           asset="wasm-bindgen-${version}-${target}.tar.gz"
           base="https://github.com/rustwasm/wasm-bindgen/releases/download/${version}"
-          pinned=b51f0208fdff83515a787bd8ab9ac5865ed84dabb66d0c709957bb59793c645f
+          pinned=9687f3bb551b9f66f37ed32a40d7913a00f7962db653054e56857bc306c3227f
 
           curl --fail --location --silent --show-error --retry 3 \
             --output "/tmp/${asset}" "${base}/${asset}"
