@@ -111,7 +111,13 @@ struct App {
     menu_open: bool,
     /// The pencil marks last written to each cell, so a render can skip the
     /// ~700 element writes that unchanged marks would otherwise cost.
-    shown_notes: [Digits; CELLS],
+    ///
+    /// `None` means "the screen is not known to show anything", which is the
+    /// state after every wholesale change of the board. It is deliberately not
+    /// zero: a cell with no marks and a cell whose marks were never drawn both
+    /// have nothing to draw, and a cache that confused them would leave the
+    /// previous puzzle's marks painted on a cleared board.
+    shown_notes: [Option<Digits>; CELLS],
 }
 
 impl App {
@@ -190,7 +196,7 @@ impl App {
             labels,
             note_slots,
             menu_open: false,
-            shown_notes: [0; CELLS],
+            shown_notes: [None; CELLS],
         })
     }
 
@@ -231,7 +237,7 @@ impl App {
 
             // Only touch the pencil marks when they changed. A digit placed on
             // one side of the board must not rewrite 700 elements on the other.
-            if self.shown_notes[index] != cell.notes {
+            if self.shown_notes[index] != Some(cell.notes) {
                 for (slot_index, slot) in self.note_slots[index].iter().enumerate() {
                     let digit = u8::try_from(slot_index + 1).unwrap_or(0);
                     let wanted = if cell.notes & crate::board::bit(digit) != 0 {
@@ -243,7 +249,7 @@ impl App {
                         slot.set_text_content(Some(&wanted));
                     }
                 }
-                self.shown_notes[index] = cell.notes;
+                self.shown_notes[index] = Some(cell.notes);
             }
         }
     }
@@ -352,14 +358,20 @@ impl App {
     }
 
     /// Replace the game and paint it from scratch.
-    ///
-    /// The pencil-mark cache is cleared first: a new puzzle's marks are all
-    /// empty, and thinking they are already painted would leave the previous
-    /// puzzle's marks on the board.
     fn replace(&mut self, game: Game) {
         self.game = game;
-        self.shown_notes = [0; CELLS];
+        self.forget_painted_notes();
         self.paint();
+    }
+
+    /// Forget what the screen is showing for pencil marks.
+    ///
+    /// Called whenever the whole board changes under the cache — a new puzzle,
+    /// a restart. It has to be `None` rather than the empty mask: the slots
+    /// still hold the old digits, and claiming they were already painted empty
+    /// is exactly what left a cleared board covered in notes.
+    fn forget_painted_notes(&mut self) {
+        self.shown_notes = [None; CELLS];
     }
 
     /// Apply a move, then repaint and save it.
@@ -561,8 +573,8 @@ fn bind_menu(document: &Document, app: &Shared) {
             let mut app = shared.borrow_mut();
             let report = app.game.restart();
             // Every pencil mark is gone, and the cache of what is on screen has
-            // to know that or the old marks would stay painted.
-            app.shown_notes = [0; CELLS];
+            // to stop claiming the old ones are already painted.
+            app.forget_painted_notes();
             app.apply(report);
         });
         listen(&restart, "click", closure.as_ref().unchecked_ref());

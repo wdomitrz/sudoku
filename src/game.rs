@@ -1122,9 +1122,16 @@ mod tests {
         let index = first_empty(&game);
         game.select(Some(index));
         game.enter(game.solution.get(index));
+        // A pencil mark somewhere else, so the restart has notes of its own to
+        // clear rather than only the digits that were in the way.
+        let noted = first_empty(&game);
+        game.select(Some(noted));
+        game.toggle_notes();
+        game.enter(1);
         game.tick();
         assert_eq!(game.restart(), Report::Restarted);
         assert_eq!(game.cells()[index].value, 0);
+        assert_eq!(game.cells()[noted].notes, 0);
         assert_eq!(game.readout().clock, "00:00");
         assert_eq!(game.undo(), Report::Idle, "a restart cannot be undone");
     }
