@@ -386,19 +386,16 @@ fn the_loader_does_nothing_but_load_and_report_failure() {
     );
 }
 
-/// An installable, accessible page: the install icon is linked, the dynamic
-/// readout is announced, and the control is a real button with a visible focus
-/// ring and a large enough target.
+/// An installable, accessible page: the install icon is linked, the failure box
+/// is there for the case where the app never starts, and the control is a real
+/// button with a visible focus ring and a large enough target.
 #[test]
 fn the_page_is_accessible_and_installable() {
     let page = shell();
     for required in [
         "id=\"board\"",
         "id=\"pad\"",
-        "id=\"status\"",
         "id=\"error\"",
-        "role=\"status\"",
-        "aria-live",
         "rel=\"manifest\"",
         "rel=\"icon\"",
         "rel=\"apple-touch-icon\"",
@@ -526,6 +523,51 @@ fn no_status_line_is_frozen() {
              app write to it"
         );
     }
+}
+
+/// Nothing is said in words: no running commentary, drawn or spoken.
+///
+/// There used to be a line between the grid and the digits reporting the last
+/// move — "9 is not the digit for that cell.", "New puzzle.", "Last move
+/// undone." — first drawn, then hidden and only spoken. Both were chatter. The
+/// grid already shows what a move did: the digit written into the cell, the
+/// pencil marks struck out of its peers, the underline on a digit that repeats.
+/// A sentence repeating that pushed the digits down the page for everyone who
+/// did not need it, and a live region reading each move out is no better for
+/// anyone who is watching the grid.
+///
+/// So the rule is that both are gone, and neither comes back by halves: an
+/// element with `aria-live` in the shell is the announcement, and an element
+/// the app writes text into between the board and the digits is the line.
+#[test]
+fn nothing_is_announced_in_words() {
+    let page = shell();
+    for banned in ["aria-live", "role=\"status\"", "id=\"status\""] {
+        assert!(
+            !page.contains(banned),
+            "the shell must carry no commentary: found {banned} in src/ui.html"
+        );
+    }
+    // Nothing the app writes sits between the grid and the digits. The board
+    // and the pad are the two things a player moves between, and anything
+    // inserted there is a line of prose by another name.
+    let board = page.find("id=\"board\"").expect("#board");
+    let pad = page.find("id=\"pad\"").expect("#pad");
+    assert!(
+        board < pad,
+        "the board must come before the digits for this test to mean anything"
+    );
+    let between = &page[board..pad];
+    assert!(
+        !between.contains("<p"),
+        "a paragraph between the board and the digits is the commentary coming \
+         back; the grid is the whole of what the app says about a move:\n{between}"
+    );
+    let css = style();
+    assert!(
+        !css.contains("#status"),
+        "the stylesheet must not style a commentary that does not exist"
+    );
 }
 
 /// The button's visible text is its accessible name. An `aria-label` describing

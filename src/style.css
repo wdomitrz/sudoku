@@ -481,17 +481,9 @@ h1 {
 
 [hidden] { display: none !important; }
 
-/* The line a screen reader hears about the last move, and the failure box for
-   the case where the app never starts. Both are silent until they have
-   something to say. */
-#status {
-  width: var(--board);
-  min-height: 1.1rem;
-  margin: 0;
-  color: var(--muted);
-  font-size: .76rem;
-}
-
+/* Nothing sits between the grid and the digits: the app says what a move did
+   on the grid itself. The one thing down here is the failure box, for the case
+   where the app never starts — and it stays hidden until then. */
 #error {
   width: var(--board);
   margin: 0;

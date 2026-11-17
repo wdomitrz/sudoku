@@ -31,9 +31,8 @@
   <span id="stamp">Easy</span>
 </header>
 
-<!-- The three facts about this sitting. `role="status"` on the clock alone would
-     announce every second, which is unbearable with a screen reader, so the
-     live region is #status below and these are plain text. -->
+<!-- The clock, as plain text: a live region around it would announce every
+     second, which is unbearable with a screen reader. -->
 <div class="facts">
   <span id="clock">00:00</span>
 </div>
@@ -41,7 +40,7 @@
 <!-- The grid: 81 buttons, written by the app on every change. Their names come
      from the app too, because a cell's text is one digit and a digit alone
      ("7") never says where it is. -->
-<div id="board" role="group" aria-labelledby="title" aria-describedby="status"></div>
+<div id="board" role="group" aria-labelledby="title"></div>
 
 <div id="solved" hidden>
   <strong>Solved</strong>
@@ -113,10 +112,14 @@
   </div>
 </div>
 
-<!-- What just happened, in words, for anyone who is not watching the grid.
-     Empty until there is something to say: a live region that ships with text
-     in it announces that text on load, which is noise. -->
-<p id="status" role="status" aria-live="polite"></p>
+<!-- Nothing between the grid and the digits. There used to be a line here
+     reporting the last move in words — "9 is not the digit for that cell",
+     "New puzzle." — first drawn and then only spoken. Both were chatter: the
+     grid already shows the digit written, the pencil marks struck out of its
+     peers, and the underline on a digit that repeats, and a sentence repeating
+     that pushed the digits down the page for everyone who did not need it.
+     The one thing that stays down here is the failure box, which only ever
+     appears when the app could not start. -->
 <p id="error" role="alert" hidden></p>
 
 <noscript>This sudoku needs JavaScript enabled. Turn it on and reload to play.</noscript>

@@ -175,16 +175,6 @@ impl Marking {
         }
     }
 
-    /// What this setting means, in one sentence, for the line under the board.
-    #[must_use]
-    pub const fn sentence(self) -> &'static str {
-        match self {
-            Self::Off => "Nothing will be marked",
-            Self::Rules => "Only a digit that repeats in its row, column or box will be marked",
-            Self::Answer => "A digit that is not the answer's will be marked",
-        }
-    }
-
     /// The setting as stored and parsed, so a saved game survives a change to
     /// the visible wording.
     #[must_use]
@@ -253,40 +243,6 @@ pub enum Report {
 }
 
 impl Report {
-    /// What to say about this report.
-    ///
-    /// One sentence, written here so the screen and the spoken announcement can
-    /// never disagree about what happened. Empty when there is nothing worth
-    /// saying.
-    #[must_use]
-    pub fn words(&self) -> String {
-        match *self {
-            // A selection changes nothing the reader cannot see, so it says
-            // nothing. The cell's name carries its position for anyone who
-            // needs it to navigate.
-            Self::Idle | Self::Selected { .. } => String::new(),
-            Self::Placed { digit, correct, .. } => {
-                if correct {
-                    String::new()
-                } else {
-                    format!("{digit} is not the digit for that cell.")
-                }
-            }
-            Self::Noted { digit, on, .. } => {
-                if on {
-                    format!("Noted {digit}.")
-                } else {
-                    format!("Removed the note {digit}.")
-                }
-            }
-            Self::Erased { .. } => "Cleared.".to_string(),
-            Self::Undone => "Last move undone.".to_string(),
-            Self::Restarted => "Puzzle restarted.".to_string(),
-            Self::MarkingChanged { marking } => format!("{}.", marking.sentence()),
-            Self::Won => "Solved.".to_string(),
-        }
-    }
-
     /// The cell this report is about, if any.
     #[must_use]
     pub const fn cell(&self) -> Option<usize> {
@@ -545,13 +501,16 @@ impl Game {
         self.snapshot();
         self.values.set(index, digit);
         self.notes[index] = 0;
-        if correct {
-            // Only a correct digit is worth trusting enough to strike out of
-            // the neighbours' pencil marks. Doing it for a wrong one would erase
-            // the player's real deductions on the strength of a typo.
-            for peer in peers(index) {
-                self.notes[peer] &= !bit(digit);
-            }
+        // Every digit, right or wrong, is struck out of the pencil marks that
+        // share its row, column or box. What is being applied is the player's
+        // own assertion — they have just said this cell holds this digit, so it
+        // cannot also sit in any of its twenty peers — and holding back on the
+        // strength of the answer would be the app second-guessing them where
+        // the grid already shows the mark: it would leave a "9" pencilled in a
+        // row that visibly contains a 9. Undo puts the marks back, so a typo is
+        // one keystroke from harmless.
+        for peer in peers(index) {
+            self.notes[peer] &= !bit(digit);
         }
         // A wrong digit is left on the board, marked wrong, rather than counted
         // or refused: the grid itself is the feedback, and a tally beside it
@@ -759,7 +718,7 @@ pub fn note_digits(mask: Digits) -> impl Iterator<Item = u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::board::solve;
+    use crate::board::{box_of, solve};
 
     /// A small puzzle with a known answer, used by most tests here.
     const PUZZLE: &str = "53..7....\
@@ -877,6 +836,77 @@ mod tests {
         );
     }
 
+    /// A digit is struck out of its peers' pencil marks whether or not it is
+    /// the answer.
+    ///
+    /// What is being applied is the player's own assertion, not the puzzle's:
+    /// they have just said this cell holds this digit, so it cannot also sit in
+    /// any cell sharing its row, column or box. Checking the answer first left
+    /// a pencilled "9" in a row that visibly contained a 9, which is a board
+    /// contradicting itself.
+    #[test]
+    fn every_placed_digit_strikes_itself_out_of_the_pencil_marks_around_it() {
+        let mut game = game();
+        let index = first_empty(&game);
+        let answer = game.solution.get(index);
+        let wrong = if answer == 9 { 1 } else { answer + 1 };
+
+        // Pencil-mark that digit into every empty peer the frame has room for:
+        // the row, the column and the box all get one.
+        game.toggle_notes();
+        let mut marked: Vec<usize> = Vec::new();
+        for peer in peers(index) {
+            if game.values.is_empty(peer) {
+                game.select(Some(peer));
+                game.enter(wrong);
+                marked.push(peer);
+            }
+        }
+        game.toggle_notes();
+        for (region, key, wanted) in [
+            ("row", row_of as fn(usize) -> usize, row_of(index)),
+            ("column", column_of as fn(usize) -> usize, column_of(index)),
+            ("box", box_of as fn(usize) -> usize, box_of(index)),
+        ] {
+            assert!(
+                marked.iter().any(|&peer| key(peer) == wanted),
+                "the test needs an empty peer in the same {region}"
+            );
+        }
+        assert_eq!(
+            marked
+                .iter()
+                .filter(|&&peer| game.cells()[peer].notes & bit(wrong) != 0)
+                .count(),
+            marked.len(),
+            "every marked peer carries the pencil mark before the placement"
+        );
+
+        // Place it for real: wrong for this cell, and the marks go anyway.
+        game.select(Some(index));
+        let report = game.enter(wrong);
+        assert!(
+            matches!(report, Report::Placed { correct: false, .. }),
+            "{report:?}"
+        );
+        for peer in &marked {
+            assert_eq!(
+                game.cells()[*peer].notes & bit(wrong),
+                0,
+                "a wrong digit is struck out of the pencil marks of its peers too"
+            );
+        }
+
+        // And undo puts them back, exactly as it does for a correct one.
+        game.undo();
+        for peer in &marked {
+            assert!(
+                game.cells()[*peer].notes & bit(wrong) != 0,
+                "undo restores the marks a wrong digit struck out"
+            );
+        }
+    }
+
     #[test]
     fn a_wrong_digit_is_kept_and_flagged_only_as_far_as_the_setting_says() {
         let game = game();
@@ -962,7 +992,6 @@ mod tests {
         for marking in Marking::ALL {
             assert_eq!(Marking::from_slug(marking.slug()), Some(marking));
             assert!(!marking.label().is_empty());
-            assert!(!marking.sentence().is_empty());
         }
         assert_eq!(Marking::from_slug("clever"), None);
     }
@@ -1250,66 +1279,5 @@ mod tests {
         assert_eq!(clock_text(3599), "59:59");
         assert_eq!(clock_text(3600), "1:00:00");
         assert_eq!(clock_text(7322), "2:02:02");
-    }
-
-    #[test]
-    fn reports_say_what_happened_without_naming_how_the_app_is_built() {
-        let index = 10;
-        // A correct digit is silent: the reader can see the cell fill, and a
-        // sentence per keystroke is noise on the one line that could be useful.
-        assert_eq!(
-            Report::Placed {
-                index,
-                digit: 4,
-                correct: true,
-                completed_digit: false,
-            }
-            .words(),
-            ""
-        );
-        // A selection is silent for the same reason.
-        assert_eq!(Report::Selected { index }.words(), "");
-        // A wrong digit says so, without a coordinate.
-        let wrong = Report::Placed {
-            index,
-            digit: 4,
-            correct: false,
-            completed_digit: false,
-        }
-        .words();
-        assert_eq!(wrong, "4 is not the digit for that cell.");
-        assert!(!wrong.to_lowercase().contains("row"));
-
-        for report in [
-            Report::Undone,
-            Report::Restarted,
-            Report::Won,
-            Report::Erased { index },
-            Report::Noted {
-                index,
-                digit: 4,
-                on: true,
-            },
-            Report::Noted {
-                index,
-                digit: 4,
-                on: false,
-            },
-        ] {
-            let words = report.words().to_lowercase();
-            assert!(!words.is_empty(), "{report:?} has nothing to say");
-            // No coordinates anywhere: "row 4, column 7" is a fact about the
-            // grid's indexing, not about what the reader did.
-            assert!(
-                !words.contains("row") && !words.contains("column"),
-                "{report:?} reports a coordinate: {words}"
-            );
-            for forbidden in ["rust", "wasm", "webassembly", "javascript", "bindgen"] {
-                assert!(
-                    !words.contains(forbidden),
-                    "{report:?} names the implementation"
-                );
-            }
-        }
     }
 }

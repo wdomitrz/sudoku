@@ -32,7 +32,7 @@ use web_sys::{
 };
 
 use crate::board::{Difficulty, Digits, CELLS};
-use crate::game::{Game, Marking, Report};
+use crate::game::{Game, Marking};
 
 /// The app's whole mutable state, and the element handles it writes through.
 ///
@@ -319,17 +319,6 @@ impl App {
         self.paint_header();
     }
 
-    /// Say what just happened, out loud and on the line below the board.
-    ///
-    /// The reader can see which cell they touched; telling them it was row 4,
-    /// column 7 is a coordinate they have no use for, on the one line that could
-    /// carry something worth reading. So the line reports the *effect* — the
-    /// digit written, the pencil mark added, the clash — and says nothing at all
-    /// about a plain selection, which changes nothing they cannot see.
-    fn announce(&mut self, report: Report) {
-        set_text(&self.document, "status", &report.words());
-    }
-
     /// Persist the game, if it is worth persisting.
     fn save(&self) {
         let Some(storage) = self.storage() else {
@@ -374,9 +363,14 @@ impl App {
         self.shown_notes = [None; CELLS];
     }
 
-    /// Apply a move, then repaint and save it.
-    fn apply(&mut self, report: Report) {
-        self.announce(report);
+    /// Repaint and save after a move.
+    ///
+    /// The move itself returns a report, and nothing here reads it: the board
+    /// is the whole of what the app says about a move — the digit in the cell,
+    /// the pencil marks struck out of its peers, the underline on a digit that
+    /// repeats. A line of prose repeating that in words was chatter between the
+    /// grid and the digits, so there is none, drawn or spoken.
+    fn apply(&mut self) {
         self.paint();
         self.save();
     }
@@ -470,8 +464,7 @@ fn bind_grid(document: &Document, app: &Shared) {
             return;
         };
         let mut app = shared.borrow_mut();
-        let report = app.game.select(Some(index));
-        app.announce(report);
+        app.game.select(Some(index));
         app.paint();
     });
     listen(&board, "click", closure.as_ref().unchecked_ref());
@@ -490,8 +483,8 @@ fn bind_pad(document: &Document, app: &Shared) {
             return;
         };
         let mut app = shared.borrow_mut();
-        let report = app.game.enter(digit);
-        app.apply(report);
+        app.game.enter(digit);
+        app.apply();
         // A tap should leave the grid focused, so the next arrow key works.
         app.focus_selected();
     });
@@ -513,12 +506,12 @@ fn bind_tools(document: &Document, app: &Shared) {
         let shared = Rc::clone(app);
         let closure = Closure::<dyn FnMut()>::new(move || {
             let mut app = shared.borrow_mut();
-            let report = match tool {
+            match tool {
                 Tool::Notes => app.game.toggle_notes(),
                 Tool::Undo => app.game.undo(),
                 Tool::Erase => app.game.erase(),
             };
-            app.apply(report);
+            app.apply();
             // Notes is a mode, not a move: it must not move the keyboard away
             // from the cell the reader is working on.
             if !matches!(tool, Tool::Notes) {
@@ -544,7 +537,6 @@ fn bind_menu(document: &Document, app: &Shared) {
             let difficulty = app.next;
             app.replace(Game::start(difficulty, fresh_seed()));
             app.save();
-            set_text(&app.document, "status", "New puzzle.");
         });
         listen(&button, "click", closure.as_ref().unchecked_ref());
         closure.forget();
@@ -571,11 +563,11 @@ fn bind_menu(document: &Document, app: &Shared) {
         let shared = Rc::clone(app);
         let closure = Closure::<dyn FnMut()>::new(move || {
             let mut app = shared.borrow_mut();
-            let report = app.game.restart();
+            app.game.restart();
             // Every pencil mark is gone, and the cache of what is on screen has
             // to stop claiming the old ones are already painted.
             app.forget_painted_notes();
-            app.apply(report);
+            app.apply();
         });
         listen(&restart, "click", closure.as_ref().unchecked_ref());
         closure.forget();
@@ -594,8 +586,8 @@ fn bind_menu(document: &Document, app: &Shared) {
                 .and_then(|element| element.dyn_into::<HtmlSelectElement>().ok())
             {
                 let marking = Marking::from_slug(&select.value()).unwrap_or(Marking::Rules);
-                let report = app.game.set_marking(marking);
-                app.apply(report);
+                app.game.set_marking(marking);
+                app.apply();
             }
         });
         listen(&select, "change", closure.as_ref().unchecked_ref());
@@ -618,7 +610,6 @@ fn bind_menu(document: &Document, app: &Shared) {
                 .and_then(|element| element.dyn_into::<HtmlSelectElement>().ok())
             {
                 app.next = Difficulty::from_slug(&select.value()).unwrap_or(Difficulty::Easy);
-                set_text(&app.document, "status", "");
             }
         });
         listen(&select, "change", closure.as_ref().unchecked_ref());
@@ -646,37 +637,35 @@ fn bind_keyboard(window: &Window, app: &Shared) {
                     let Some(next) = neighbour(app.game.selected(), &key) else {
                         return;
                     };
-                    let report = app.game.select(Some(next));
-                    app.announce(report);
+                    app.game.select(Some(next));
                     app.paint();
                     app.focus_selected();
                     true
                 }
                 "Backspace" | "Delete" | "0" => {
-                    let report = app.game.erase();
-                    app.apply(report);
+                    app.game.erase();
+                    app.apply();
                     true
                 }
                 "n" | "N" => {
-                    let report = app.game.toggle_notes();
-                    app.apply(report);
+                    app.game.toggle_notes();
+                    app.apply();
                     true
                 }
                 "u" | "U" => {
-                    let report = app.game.undo();
-                    app.apply(report);
+                    app.game.undo();
+                    app.apply();
                     true
                 }
                 "Escape" => {
-                    let report = app.game.select(None);
-                    app.announce(report);
+                    app.game.select(None);
                     app.paint();
                     true
                 }
                 digit => match digit.parse::<u8>() {
                     Ok(value) if (1..=9).contains(&value) => {
-                        let report = app.game.enter(value);
-                        app.apply(report);
+                        app.game.enter(value);
+                        app.apply();
                         true
                     }
                     _ => false,
